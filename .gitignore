@@ -1,0 +1,24 @@
+venv/
+.vscode/
+__pycache__/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temp files
+*.tmp
+
+# Jupyter (if any)
+.ipynb_checkpoints/
+
+# Build files
+dist/
+build/
+*.egg-info/
+
+# Environment variables
+.env

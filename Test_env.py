@@ -7,7 +7,7 @@ import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 
 from models import CreditAction
-from server.microfinance_environment import MicrofinanceEnvironment
+from microfinance_environment import MicrofinanceEnvironment
 from grader import programmatic_grade, batch_evaluate
 
 def print_obs(obs, label=""):
