@@ -11,6 +11,7 @@ Thumbs.db
 
 # Temp files
 *.tmp
+.tempCodeRunnerFile
 
 # Jupyter (if any)
 .ipynb_checkpoints/
