@@ -1,0 +1,30 @@
+name: microfinance-credit-env
+version: 0.1.0
+description: >
+  Microfinance Credit Decision Environment for RL post-training.
+  An agent must approve or reject micro-loan applications in India
+  with partial information, learning to strategically request documents
+  before making a decision. Features conflicting signals, borderline
+  cases, and noisy labels to prevent trivial classification shortcuts.
+
+author: your-name
+license: MIT
+
+action_class: CreditAction
+observation_class: ApplicantObservation
+
+entry_point: server.app:app
+
+tags:
+  - finance
+  - india
+  - partial-observability
+  - multi-step
+  - real-world
+
+reward_range: [-2.15, 1.0]
+max_steps: 7
+
+environment_variables:
+  DATASET_SIZE: "300"
+  SEED: "42"
