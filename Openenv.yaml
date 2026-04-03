@@ -7,8 +7,7 @@ description: >
   before making a decision. Features conflicting signals, borderline
   cases, and noisy labels to prevent trivial classification shortcuts.
 
-author: your-name
-license: MIT
+author: Suraj Kanti 
 
 action_class: CreditAction
 observation_class: ApplicantObservation
