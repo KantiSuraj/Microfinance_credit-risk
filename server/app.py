@@ -1,84 +1,36 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree.
-
 """
-FastAPI application for the Microfinance Env Environment.
+server/app.py — FastAPI entry point for the Microfinance Credit Decision Environment.
 
-This module creates an HTTP server that exposes the MicrofinanceEnvironment
-over HTTP and WebSocket endpoints, compatible with EnvClient.
+The environment exposes two observation types across its two phases:
+  Phase 1 (APPLICATION) → ApplicantObservation
+  Phase 2 (MONITORING)  → MonitoringObservation
 
-Endpoints:
-    - POST /reset: Reset the environment
-    - POST /step: Execute an action
-    - GET /state: Get current environment state
-    - GET /schema: Get action/observation schemas
-    - WS /ws: WebSocket endpoint for persistent sessions
+OpenEnv's create_fastapi_app only accepts one observation type for the /step
+endpoint schema, so we register ApplicantObservation as the declared type
+(it's the entry point every episode starts with) and let MonitoringObservation
+pass through via the metadata dict — both are dataclasses that serialise
+cleanly to JSON.
 
-Usage:
-    # Development (with auto-reload):
-    uvicorn server.app:app --reload --host 0.0.0.0 --port 8000
-
-    # Production:
-    uvicorn server.app:app --host 0.0.0.0 --port 8000 --workers 4
-
-    # Or run directly:
-    python -m server.app
+The /state endpoint always returns MicrofinanceState regardless of phase.
 """
 
-try:
-    from openenv.core.env_server.http_server import create_app
-except Exception as e:  # pragma: no cover
-    raise ImportError(
-        "openenv is required for the web interface. Install dependencies with '\n    uv sync\n'"
-    ) from e
+import sys
+import os
 
-try:
-    from ..models import MicrofinanceAction, MicrofinanceObservation
-    from .microfinance_env_environment import MicrofinanceEnvironment
-except ModuleNotFoundError:
-    from models import MicrofinanceAction, MicrofinanceObservation
-    from server.microfinance_env_environment import MicrofinanceEnvironment
+# Ensure the env root is on the path (mirrors PYTHONPATH in Dockerfile)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from openenv.core.env_server import create_fastapi_app
+from models import CreditAction, ApplicantObservation
+from microfinance_env_environment import MicrofinanceEnvironment
 
-# Create the app with web interface and README integration
-app = create_app(
-    MicrofinanceEnvironment,
-    MicrofinanceAction,
-    MicrofinanceObservation,
-    env_name="microfinance_env",
-    max_concurrent_envs=1,  # increase this number to allow more concurrent WebSocket sessions
-)
+# ── Instantiate environment ────────────────────────────────────────────────
+# DATASET_SIZE and SEED are read from env vars so the Dockerfile can
+# override them without rebuilding the image.
+_dataset_size = int(os.environ.get("DATASET_SIZE", "300"))
+_seed         = int(os.environ.get("SEED", "42"))
 
+env = MicrofinanceEnvironment(dataset_size=_dataset_size, seed=_seed)
 
-def main(host: str = "0.0.0.0", port: int = 8000):
-    """
-    Entry point for direct execution via uv run or python -m.
-
-    This function enables running the server without Docker:
-        uv run --project . server
-        uv run --project . server --port 8001
-        python -m microfinance_env.server.app
-
-    Args:
-        host: Host address to bind to (default: "0.0.0.0")
-        port: Port number to listen on (default: 8000)
-
-    For production deployments, consider using uvicorn directly with
-    multiple workers:
-        uvicorn microfinance_env.server.app:app --workers 4
-    """
-    import uvicorn
-
-    uvicorn.run(app, host=host, port=port)
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8000)
-    args = parser.parse_args()
-    main(port=args.port)
+# ── Create the ASGI app ────────────────────────────────────────────────────
+app = create_fastapi_app(env, CreditAction, ApplicantObservation)

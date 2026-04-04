@@ -1,252 +1,274 @@
 """
-grader.py — Two complementary evaluation modes for the Microfinance environment.
+grader.py — Trajectory-aware evaluation for the two-phase environment.
 
-1. Programmatic grader   : fast, deterministic, used in Round 1 automated eval
-2. LLM grader            : richer qualitative scoring, used in Round 2 / finals
+Unlike v1, this grader evaluates the FULL TRAJECTORY across both phases:
 
-Both return a GradeResult with a 0–1 normalised score and a breakdown dict.
+1. Phase 1 quality    : Was approval/rejection correct? Efficient?
+2. Phase 2 quality    : Were interventions well-timed? Did the agent
+                        adapt to noisy signals appropriately?
+3. Information flow   : Did Phase 1 doc collection improve Phase 2 outcomes?
+4. Compounding effect : Did early interventions outperform late ones?
+                        (measured by comparing default_prob at month 3 vs 6)
+
+The key metric that's impossible for a classifier: TIMING SCORE.
+A correct approval followed by a late intervention on a deteriorating
+borrower scores lower than the same approval with a timely restructure.
 """
 
 from __future__ import annotations
 import json
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List
 
-# ── Result container ──────────────────────────────────────────────────────
 
 @dataclass
-class GradeResult:
-    """Unified result from either grader."""
-    score: float                             # 0.0 – 1.0 normalised
-    passed: bool                             # score >= threshold (0.6)
-    breakdown: dict = field(default_factory=dict)
-    llm_feedback: Optional[str] = None
+class TrajectoryGrade:
+    score          : float
+    passed         : bool
+    phase1_score   : float
+    phase2_score   : float
+    timing_score   : float
+    info_flow_score: float
+    breakdown      : dict = field(default_factory=dict)
+    llm_feedback   : Optional[str] = None
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# 1. PROGRAMMATIC GRADER
-# ═════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════
+# PROGRAMMATIC TRAJECTORY GRADER
+# ══════════════════════════════════════════════════════════════════════════
 
-def programmatic_grade(episode_log: dict) -> GradeResult:
+def grade_trajectory(episode_log: dict) -> TrajectoryGrade:
     """
-    Evaluate one episode from its log dict.
+    Full trajectory evaluation.
 
-    episode_log keys expected
+    episode_log expected keys
     ─────────────────────────
-    decision          : "APPROVE" | "REJECT" | "TIMEOUT"
-    ground_truth      : "APPROVE" | "REJECT"
-    default_prob      : float  (0–1, hidden from agent during episode)
-    steps_taken       : int
-    docs_requested    : list[str]
-    cumulative_penalty: float
-    terminal_reward   : float
-    has_conflicting_signal : bool
+    phase1_decision        : "APPROVE" | "REJECT"
+    ground_truth           : "APPROVE" | "REJECT"
+    default_prob           : float
+    phase1_steps           : int
+    docs_collected         : list[str]
+    phase1_reward          : float
+    reached_phase2         : bool
+    terminal_outcome       : "REPAID" | "DEFAULT" | "ESCALATED" | "TIMEOUT"
+    terminal_reward        : float
+    payment_history        : list["ON_TIME" | "MISSED"]  (true values)
+    intervention_history   : list[str]  e.g. ["M3:REMINDER", "M6:RESTRUCTURE"]
+    signal_quality         : float
     is_borderline          : bool
+    has_conflicting_signal : bool
+    default_prob_at_month3 : float  (actual hidden prob at month 3)
+    default_prob_at_month6 : float  (actual hidden prob at month 6)
     """
-    decision     = episode_log.get("decision", "TIMEOUT")
+    bd = {}   # breakdown accumulator
+
+    p1_decision  = episode_log.get("phase1_decision", "REJECT")
     ground_truth = episode_log.get("ground_truth", "REJECT")
     default_prob = episode_log.get("default_prob", 0.5)
-    steps        = episode_log.get("steps_taken", 7)
-    penalty      = episode_log.get("cumulative_penalty", 0.0)
-    terminal_rew = episode_log.get("terminal_reward", -1.5)
+    p1_steps     = episode_log.get("phase1_steps", 7)
+    docs         = episode_log.get("docs_collected", [])
+    phase2       = episode_log.get("reached_phase2", False)
+    outcome      = episode_log.get("terminal_outcome", "TIMEOUT")
+    p1_reward    = episode_log.get("phase1_reward", -1.5)
+    t_reward     = episode_log.get("terminal_reward", -1.5)
+    payments     = episode_log.get("payment_history", [])
+    interventions= episode_log.get("intervention_history", [])
+    sq           = episode_log.get("signal_quality", 0.60)
     borderline   = episode_log.get("is_borderline", False)
 
-    breakdown = {}
-
-    # ── Correctness (50 % of score) ───────────────────────────────────────
-    correct = decision == ground_truth
-    breakdown["correct_decision"] = correct
+    # ── Phase 1 score (35 %) ──────────────────────────────────────────────
+    correct = (p1_decision == ground_truth)
+    bd["phase1_correct"] = correct
 
     if correct:
-        correctness_score = 1.0
-    elif decision == "TIMEOUT":
-        correctness_score = 0.0
+        p1_correctness = 1.0
+    elif outcome in ("REPAID",):
+        # Wrong approval but loan repaid — outcome redeems the mistake partially
+        p1_correctness = 0.4
+    elif p1_decision == "APPROVE" and outcome == "DEFAULT":
+        p1_correctness = 0.0
     else:
-        # Wrong but decisive — partial credit based on how ambiguous the case was
-        ambiguity = 1.0 - abs(default_prob - 0.5) * 2   # 0 = clear-cut, 1 = 50/50
-        correctness_score = ambiguity * 0.3              # max 0.3 for wrong on ambiguous
-    breakdown["correctness_score"] = round(correctness_score, 3)
+        ambiguity = 1.0 - abs(default_prob - 0.5) * 2
+        p1_correctness = ambiguity * 0.25
 
-    # ── Efficiency (30 % of score) ────────────────────────────────────────
-    # Ideal: decide in ≤3 steps on easy cases, ≤5 on borderline
-    ideal_steps = 5 if borderline else 3
-    efficiency  = max(0.0, 1.0 - max(0, steps - ideal_steps) / 4)
-    breakdown["efficiency_score"]  = round(efficiency, 3)
-    breakdown["steps_taken"]       = steps
+    ideal_p1_steps = 5 if borderline else 3
+    p1_efficiency = max(0.0, 1.0 - max(0, p1_steps - ideal_p1_steps) / 4)
+    phase1_score = p1_correctness * 0.7 + p1_efficiency * 0.3
+    bd["phase1_correctness"] = round(p1_correctness, 3)
+    bd["phase1_efficiency"]  = round(p1_efficiency, 3)
+    bd["phase1_score"]       = round(phase1_score, 3)
 
-    # ── Information strategy (20 % of score) ─────────────────────────────
-    # Did the agent request relevant docs? Did it avoid redundant requests?
-    docs = episode_log.get("docs_requested", [])
-    unique_docs   = len(set(docs))
-    redundant_req = len(docs) - unique_docs
-
-    # Requesting income proof AND credit history on borderline cases is good
-    if borderline:
-        info_score = 1.0 if unique_docs >= 2 else 0.5
+    # ── Phase 2 score (35 %) ──────────────────────────────────────────────
+    if not phase2:
+        # Episode ended in Phase 1 — score purely on outcome quality
+        phase2_score = p1_correctness   # consistent with Phase 1 judgement
+        bd["phase2_note"] = "No Phase 2 (rejected or timeout in Phase 1)"
     else:
-        # On easy cases, requesting too many docs is inefficient
-        info_score = max(0.0, 1.0 - redundant_req * 0.4 - max(0, unique_docs - 2) * 0.2)
+        if outcome == "REPAID":
+            outcome_score = 1.0
+        elif outcome == "DEFAULT":
+            outcome_score = 0.0
+        elif outcome == "ESCALATED":
+            # Partial credit — agent recognised risk and cut losses
+            outcome_score = 0.4
+        else:
+            outcome_score = 0.1
 
-    breakdown["info_strategy_score"] = round(info_score, 3)
-    breakdown["docs_requested"]      = docs
+        # Penalise unnecessary restructures (over-intervention)
+        n_restructure = sum(1 for i in interventions if "RESTRUCTURE" in i)
+        over_intervene_penalty = max(0.0, (n_restructure - 1) * 0.15)
+
+        phase2_score = max(0.0, outcome_score - over_intervene_penalty)
+        bd["phase2_outcome_score"]    = round(outcome_score, 3)
+        bd["over_intervene_penalty"]  = round(over_intervene_penalty, 3)
+        bd["phase2_score"]            = round(phase2_score, 3)
+
+    # ── Timing score (20 %) ───────────────────────────────────────────────
+    # The key metric a classifier can never optimise.
+    # Did the agent intervene BEFORE the borrower deteriorated badly?
+    timing_score = 0.5   # neutral default
+
+    if phase2 and interventions:
+        # Extract month numbers of first intervention
+        first_month = _extract_month(interventions[0])
+        n_misses_before_first = sum(
+            1 for i, p in enumerate(payments)
+            if i < first_month - 1 and p == "MISSED"
+        )
+        # Ideal: intervene within 2 months of first miss
+        if n_misses_before_first == 0:
+            timing_score = 1.0   # proactive — intervened before any miss
+        elif n_misses_before_first <= 1:
+            timing_score = 0.85  # reactive but fast
+        elif n_misses_before_first <= 2:
+            timing_score = 0.6   # late
+        else:
+            timing_score = 0.2   # very late (reactive too slow)
+
+        # Bonus: did restructure happen early enough to actually help?
+        p_m3 = episode_log.get("default_prob_at_month3", default_prob)
+        p_m6 = episode_log.get("default_prob_at_month6", default_prob)
+        if p_m3 < p_m6:
+            timing_score = max(0.0, timing_score - 0.2)  # interventions too late to bend curve
+    elif phase2 and not interventions:
+        # Agent never intervened in Phase 2 — penalise if outcome was default
+        timing_score = 0.3 if outcome == "DEFAULT" else 0.7
+
+    bd["timing_score"] = round(timing_score, 3)
+
+    # ── Information flow score (10 %) ─────────────────────────────────────
+    # Did collecting more info in Phase 1 correlate with better Phase 2 outcome?
+    # Proxy: signal_quality correlates with ability to catch early warning signs
+    if sq is None:
+        # Rejected in Phase 1 — no Phase 2 signal to evaluate
+        info_flow = 0.7 if docs else 0.5
+    elif sq >= 0.90:
+        info_flow = 1.0
+    elif sq >= 0.75:
+        info_flow = 0.7
+    else:
+        info_flow = 0.4
+
+    # If signal was noisy but agent still got good outcome, partial credit
+    if sq is not None and sq < 0.75 and outcome == "REPAID":
+        info_flow = min(info_flow + 0.2, 1.0)
+
+    bd["info_flow_score"] = round(info_flow, 3)
+    bd["signal_quality"]  = sq
 
     # ── Composite ─────────────────────────────────────────────────────────
     composite = (
-        correctness_score * 0.50
-        + efficiency       * 0.30
-        + info_score       * 0.20
+        phase1_score  * 0.35
+        + phase2_score  * 0.35
+        + timing_score  * 0.20
+        + info_flow     * 0.10
     )
-    breakdown["composite_score"]  = round(composite, 3)
-    breakdown["terminal_reward"]  = terminal_rew
+    bd["composite"] = round(composite, 4)
+    bd["terminal_reward"] = t_reward
 
-    return GradeResult(
-        score    = round(composite, 4),
-        passed   = composite >= 0.60,
-        breakdown= breakdown,
+    return TrajectoryGrade(
+        score           = round(composite, 4),
+        passed          = composite >= 0.60,
+        phase1_score    = round(phase1_score, 3),
+        phase2_score    = round(phase2_score, 3),
+        timing_score    = round(timing_score, 3),
+        info_flow_score = round(info_flow, 3),
+        breakdown       = bd,
     )
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# 2. LLM GRADER  (returns the prompt; caller passes it to any LLM API)
-# ═════════════════════════════════════════════════════════════════════════════
+def _extract_month(intervention_str: str) -> int:
+    """Parse month number from e.g. 'M3:REMINDER' → 3."""
+    try:
+        return int(intervention_str.split(":")[0][1:])
+    except (IndexError, ValueError):
+        return 99
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# LLM GRADER PROMPT
+# ══════════════════════════════════════════════════════════════════════════
 
 LLM_GRADER_SYSTEM = """
-You are an expert evaluator for a microfinance credit-decision RL environment.
-Your job is to assess the QUALITY OF REASONING and DECISION STRATEGY of an AI
-agent that processed a loan application.
+You are an expert evaluator for a two-phase microfinance RL environment.
+The agent must: (1) decide whether to approve a loan with partial information,
+then (2) monitor the loan monthly and intervene to prevent default.
 
-You will receive:
-  - The sequence of actions taken by the agent (with rationales if provided)
-  - The applicant profile that was gradually revealed
-  - The ground-truth outcome (whether the applicant was a good borrower)
+Score on FOUR dimensions (0–10 each):
 
-Score the agent on THREE dimensions, each 0–10:
+1. PHASE 1 REASONING
+   Was the approval/rejection decision sound given collected evidence?
+   Did the agent request the right documents without over-requesting?
 
-1. REASONING QUALITY
-   - Did the agent request documents in a logical order?
-   - Did it correctly identify conflicting signals (e.g., high income but many dependents)?
-   - Did it handle uncertainty appropriately?
+2. PHASE 2 MANAGEMENT
+   Were monthly observations interpreted correctly despite noise?
+   Was intervention timing appropriate (early vs late)?
+   Was the right intervention type chosen (reminder vs restructure)?
 
-2. DECISION ACCURACY
-   - Was the final APPROVE/REJECT consistent with the evidence collected?
-   - On borderline cases, did it gather sufficient information before deciding?
-   - Did it avoid both false positives (approving defaulters) and false negatives
-     (rejecting creditworthy borrowers)?
+3. TRAJECTORY COHERENCE
+   Did the agent's Phase 1 information gathering improve Phase 2 decisions?
+   Is there evidence the agent traded off Phase 1 cost against Phase 2 signal quality?
 
-3. FINANCIAL INCLUSION AWARENESS
-   - Did the agent show awareness that over-rejection harms vulnerable borrowers?
-   - For rural applicants or seasonal workers, did it avoid purely income-based rejection?
-   - Did it consider the full context (repayment streak, community tier, stability)?
+4. FINANCIAL INCLUSION AWARENESS
+   Did the agent avoid over-rejection of creditworthy borrowers?
+   On repaid loans, did the agent avoid over-intervention (unnecessary restructures)?
 
-Respond ONLY with valid JSON in this exact format:
+Respond ONLY with valid JSON:
 {
-  "reasoning_quality": <int 0-10>,
-  "decision_accuracy": <int 0-10>,
-  "financial_inclusion": <int 0-10>,
-  "weighted_score": <float 0-1>,
-  "summary": "<2-3 sentence qualitative assessment>",
+  "phase1_reasoning": <0-10>,
+  "phase2_management": <0-10>,
+  "trajectory_coherence": <0-10>,
+  "financial_inclusion": <0-10>,
+  "weighted_score": <0.0-1.0>,
+  "summary": "<2-3 sentences>",
   "key_strength": "<one sentence>",
   "key_weakness": "<one sentence>"
 }
 """.strip()
 
 
-def build_llm_grader_prompt(episode_log: dict) -> tuple[str, str]:
-    """
-    Returns (system_prompt, user_prompt) ready to pass to any LLM API.
+def build_llm_prompt(episode_log: dict) -> tuple[str, str]:
+    user = f"""
+## Full Trajectory Log
 
-    episode_log should include the 'action_trace' list, e.g.:
-    [
-      {"step": 1, "action": "REQUEST_INCOME_PROOF",  "rationale": "..."},
-      {"step": 2, "action": "REQUEST_CREDIT_HISTORY","rationale": "..."},
-      {"step": 3, "action": "APPROVE",               "rationale": "..."},
-    ]
-    plus all keys from programmatic_grade()'s episode_log.
-    """
-    action_trace  = episode_log.get("action_trace", [])
-    profile_view  = episode_log.get("revealed_profile", {})
-    decision      = episode_log.get("decision", "TIMEOUT")
-    ground_truth  = episode_log.get("ground_truth", "UNKNOWN")
-    default_prob  = episode_log.get("default_prob", 0.5)
-    borderline    = episode_log.get("is_borderline", False)
-    conflicting   = episode_log.get("has_conflicting_signal", False)
+### Phase 1 — Application
+- Decision     : {episode_log.get('phase1_decision')}
+- Ground truth : {episode_log.get('ground_truth')}
+- Default prob : {episode_log.get('default_prob', 0):.2f}
+- Steps taken  : {episode_log.get('phase1_steps')}
+- Docs collected: {episode_log.get('docs_collected', [])}
+- Signal quality set: {episode_log.get('signal_quality', 'N/A')}
 
-    user_prompt = f"""
-## Applicant Profile (as revealed to agent)
+### Phase 2 — Monitoring (if reached)
+- Payment history (true): {episode_log.get('payment_history', [])}
+- Interventions (timing): {episode_log.get('intervention_history', [])}
+- Terminal outcome       : {episode_log.get('terminal_outcome')}
+- Terminal reward        : {episode_log.get('terminal_reward')}
 
-```json
-{json.dumps(profile_view, indent=2)}
-```
+### Case metadata
+- Borderline case         : {episode_log.get('is_borderline')}
+- Has conflicting signals : {episode_log.get('has_conflicting_signal')}
 
-## Agent Action Trace
-
-```json
-{json.dumps(action_trace, indent=2)}
-```
-
-## Outcome
-
-- Agent decision   : **{decision}**
-- Ground truth     : **{ground_truth}**
-- Default prob     : {default_prob:.2f}
-- Case type        : {"BORDERLINE" if borderline else "CONFLICTING SIGNALS" if conflicting else "STANDARD"}
-
-Evaluate the agent's performance using the three dimensions described in the
-system prompt and return valid JSON only.
+Evaluate this trajectory across all four dimensions and return JSON only.
 """.strip()
-
-    return LLM_GRADER_SYSTEM, user_prompt
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# 3. BATCH EVALUATION HARNESS
-# ═════════════════════════════════════════════════════════════════════════════
-
-def batch_evaluate(
-    episode_logs: list[dict],
-    use_llm: bool = False,
-    llm_fn=None,          # callable(system, user) -> str  (JSON response)
-) -> dict:
-    """
-    Run programmatic (and optionally LLM) grading over multiple episodes.
-    Returns aggregate statistics.
-    """
-    results         = [programmatic_grade(log) for log in episode_logs]
-    scores          = [r.score for r in results]
-    passed          = sum(1 for r in results if r.passed)
-
-    # Breakdown by case type
-    borderline_logs  = [l for l in episode_logs if l.get("is_borderline")]
-    conflict_logs    = [l for l in episode_logs if l.get("has_conflicting_signal")]
-
-    def _avg(lst): return round(sum(lst) / len(lst), 4) if lst else 0.0
-
-    summary = {
-        "n_episodes"         : len(episode_logs),
-        "pass_rate"          : round(passed / max(len(results), 1), 4),
-        "mean_score"         : _avg(scores),
-        "median_score"       : _avg(sorted(scores)[len(scores) // 2 : len(scores) // 2 + 1]),
-        "borderline_accuracy": _avg([
-            1.0 if episode_logs[i].get("decision") == episode_logs[i].get("ground_truth") else 0.0
-            for i in range(len(episode_logs)) if episode_logs[i].get("is_borderline")
-        ]),
-        "conflict_accuracy"  : _avg([
-            1.0 if episode_logs[i].get("decision") == episode_logs[i].get("ground_truth") else 0.0
-            for i in range(len(episode_logs)) if episode_logs[i].get("has_conflicting_signal")
-        ]),
-        "mean_steps"         : _avg([l.get("steps_taken", 7) for l in episode_logs]),
-    }
-
-    if use_llm and llm_fn:
-        llm_scores = []
-        for log in episode_logs[:20]:   # cap LLM calls at 20 to save tokens
-            sys_p, usr_p = build_llm_grader_prompt(log)
-            try:
-                raw  = llm_fn(sys_p, usr_p)
-                data = json.loads(raw)
-                llm_scores.append(data.get("weighted_score", 0.0))
-            except Exception:
-                pass
-        summary["llm_mean_score"] = _avg(llm_scores)
-
-    return summary
+    return LLM_GRADER_SYSTEM, user

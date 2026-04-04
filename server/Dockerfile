@@ -5,41 +5,31 @@
 # LICENSE file in the root directory of this source tree.
 
 # Multi-stage build using openenv-base
-# This Dockerfile is flexible and works for both:
-# - In-repo environments (with local OpenEnv sources)
-# - Standalone environments (with openenv from PyPI/Git)
-# The build script (openenv build) handles context detection and sets appropriate build args.
-
 ARG BASE_IMAGE=ghcr.io/meta-pytorch/openenv-base:latest
 FROM ${BASE_IMAGE} AS builder
 
 WORKDIR /app
 
-# Ensure git is available (required for installing dependencies from VCS)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends git && \
     rm -rf /var/lib/apt/lists/*
 
-# Build argument to control whether we're building standalone or in-repo
 ARG BUILD_MODE=in-repo
 ARG ENV_NAME=microfinance_env
 
-# Copy environment code (always at root of build context)
+# Copy the entire env directory as build context
 COPY . /app/env
 
-# For in-repo builds, openenv is already vendored in the build context
-# For standalone builds, openenv will be installed via pyproject.toml
 WORKDIR /app/env
 
-# Ensure uv is available (for local builds where base image lacks it)
+# Ensure uv is available
 RUN if ! command -v uv >/dev/null 2>&1; then \
         curl -LsSf https://astral.sh/uv/install.sh | sh && \
         mv /root/.local/bin/uv /usr/local/bin/uv && \
         mv /root/.local/bin/uvx /usr/local/bin/uvx; \
     fi
-    
-# Install dependencies using uv sync
-# If uv.lock exists, use it; otherwise resolve on the fly
+
+# Install dependencies — deps-only layer first for cache efficiency
 RUN --mount=type=cache,target=/root/.cache/uv \
     if [ -f uv.lock ]; then \
         uv sync --frozen --no-install-project --no-editable; \
@@ -47,6 +37,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         uv sync --no-install-project --no-editable; \
     fi
 
+# Install the project itself
 RUN --mount=type=cache,target=/root/.cache/uv \
     if [ -f uv.lock ]; then \
         uv sync --frozen --no-editable; \
@@ -54,27 +45,24 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         uv sync --no-editable; \
     fi
 
-# Final runtime stage
+# ── Runtime stage ──────────────────────────────────────────────────────────
 FROM ${BASE_IMAGE}
 
 WORKDIR /app
 
-# Copy the virtual environment from builder
 COPY --from=builder /app/env/.venv /app/.venv
+COPY --from=builder /app/env       /app/env
 
-# Copy the environment code
-COPY --from=builder /app/env /app/env
-
-# Set PATH to use the virtual environment
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Set PYTHONPATH so imports work correctly
+# Ensure all modules resolve correctly from the env root
 ENV PYTHONPATH="/app/env:$PYTHONPATH"
 
-# Health check
+# Runtime tunables — override with docker run -e or HF Space secrets
+ENV DATASET_SIZE=300
+ENV SEED=42
+
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run the FastAPI server
-# The module path is constructed to work with the /app/env structure
 CMD ["sh", "-c", "cd /app/env && uvicorn server.app:app --host 0.0.0.0 --port 8000"]
