@@ -1,4 +1,11 @@
-name: microfinance-credit-env
+spec_version: 1
+name: microfinance_env
+type: space
+runtime: fastapi
+app: server.app:app
+port: 8000
+
+name: microfinance-env
 version: 0.1.0
 description: >
   Microfinance Credit Decision Environment for RL post-training.

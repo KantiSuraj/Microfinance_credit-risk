@@ -1,75 +1,255 @@
-# Microfinance Credit Decision Environment
-
-This repository contains a robust Reinforcement Learning (RL) environment designed for simulating and solving microfinance credit decisions. Unlike traditional machine learning approaches that predict a binary outcome from a static dataset, this environment captures the **sequential, cost-aware reality of loan under-writing** by forcing an agent to actively gather intelligence under tight efficiency constraints.
-
+---
+title: Microfinance Env Environment Server
+emoji: 🎻
+colorFrom: gray
+colorTo: pink
+sdk: docker
+pinned: false
+app_port: 8000
+base_path: /web
+tags:
+  - openenv
 ---
 
-## The Paradigm Shift: RL vs Traditional ML
+# Microfinance Env Environment
 
-Traditional ML models for credit risk assume all data is neatly available upfront. They have no notion of asking for more information, delaying decisions, or factoring in the operational cost of prolonged analysis. This RL version introduces critical paradigm shifts:
+A simple test environment that echoes back messages. Perfect for testing the env APIs as well as demonstrating environment usage patterns.
 
-### 1. Sequential Information Gathering
-- **Standard ML:** A one-shot binary decision based on a complete static row of data.
-- **RL Microfinance:** A sequence of progressive decisions. For example:
-     - **Step 1:** Data is initially incomplete (only occupation/dependents visible).
-     - **Step 2:** Agent requests income proof (incurring a time/step penalty).
-     - **Step 3:** Agent requests credit history (incurring another penalty).
-     - **Step 4:** New info proves satisfactory → Agent Approves.
-- Multi-step reasoning and dynamic state discovery is impossible in standard supervised ML but acts as the fundamental loop here.
+## Quick Start
 
-### 2. A Richer, Progressive Action Space
-Instead of merely a classifier, the agent must develop a policy involving multiple interacting actions:
-- `APPROVE` / `REJECT` (Terminal Actions)
-- `REQUEST_INCOME_PROOF` / `REQUEST_CREDIT_HISTORY` (Information Actions)
-- `FLAG_FOR_REVIEW` (Escalation Action)
+The simplest way to use the Microfinance Env environment is through the `MicrofinanceEnv` class:
 
-### 3. Trade-offs & Asymmetric Cost Modeling
-The environment explicitly models real-world business and societal trade-offs. Asking for documents costs time and resources. Even more critically, the business penalties are deeply asymmetric:
-- **Correct Approve (+1.0):** Ideal scenario.
-- **Wrong Approve (-2.0):** Massive penalty for issuing bad debt (false positive).
-- **Correct Reject (+0.6):** Good risk management, but doesn't grow the business like a good loan.
-- **Wrong Reject (-1.0):** Opportunity loss and potential harm to creditworthy borrowers (false negative).
-- **Indecision (-1.5):** Failing to make a decision within 7 steps forces an auto-rejection.
-- **Operational Costs:** `-0.1` per document request, `-0.15` for flagging for senior reviews.
+```python
+from microfinance_env import MicrofinanceAction, MicrofinanceEnv
 
-RL optimizes the "best decision under these constraints," capturing lending dynamics that ML fails to encompass.
+try:
+    # Create environment from Docker image
+    microfinance_envenv = MicrofinanceEnv.from_docker_image("microfinance_env-env:latest")
 
----
+    # Reset
+    result = microfinance_envenv.reset()
+    print(f"Reset: {result.observation.echoed_message}")
 
-## Code Structure & Key Components
+    # Send multiple messages
+    messages = ["Hello, World!", "Testing echo", "Final message"]
 
-### 1. State Management & Discovery (`Models.py` & `Microfinance enviroment.py`)
-At the start of an episode, critical fields like `monthly_income`, `income_source_stability`, `past_defaults`, `repayment_streak`, and `senior_review_comment` are explicitly hidden (`None`).
-- **Active Discovery:** Each document action fetches specific fields and updates the `ApplicantObservation` state.
-- **Strict Budgeting:** The agent operates under a hard `max_steps = 7` strict limit. 
-- **No Free Lunches:** Requesting the same document twice yields no new info but still incurs a wasted step penalty. The agent must memorize its progress to stay financially and computationally efficient.
+    for msg in messages:
+        result = microfinance_envenv.step(MicrofinanceAction(message=msg))
+        print(f"Sent: '{msg}'")
+        print(f"  → Echoed: '{result.observation.echoed_message}'")
+        print(f"  → Length: {result.observation.message_length}")
+        print(f"  → Reward: {result.reward}")
 
-### 2. Synthetic Data Generation (`Data generator.py`)
-A trivial dataset where income purely correlates with creditworthiness would allow an agent to succeed with a lazy, one-dimensional threshold. This generator accurately models real-world socioeconomic turbulence:
-- **Income Distribution:** Uses a log-normal distribution centered around ₹18,000 with a heavy tail, accurately mirroring real emerging markets.
-- **Occupation Traps:** Segregates occupations into `STABLE_JOBS` (government, teachers), `VARIABLE_JOBS` (freelancers, artisans), and `SEASONAL_JOBS` (farmers, daily construction). An applicant with high income but seasonal stability often faces higher default risk.
-- **Nuanced Ground Truth Scoring:** Rather than a simple cut-off, ground truth default probability calculates debt-to-income limits, dependent burdens, stability penalties, and recent repayment streaks mitigating older defaults. Furthermore, rural lending logic acts as a relaxing modifier to mimic informal economy practices.
-- **Noise & Borderline Distribution:** 
-  - **20% Conflicting Signals:** High income but multiple dependents and a recent default; or very low income but flawless repayment streaks.
-  - **18% Borderline Cases:** Marginal LTI ratios relying entirely on a good recent sprint of repayments.
-  - **8% Label Noise:** Deliberate paradoxes injected to prevent pure over-fitting.
-- Outcome ratios safely distribute as ~54% Approve vs 46% Reject.
+finally:
+    # Always clean up
+    microfinance_envenv.close()
+```
 
-### 3. Comprehensive Evaluation Logic (`Grader.py`)
-Grading an RL agent purely on binary accuracy misses qualitative mastery. Thus, the programmatic grader utilizes a tripartite reward system:
-- **Correctness (50%):** Does the decision match ground truth? If an agent gets it wrong on an objectively ambiguous case, the grader awards a partial ambiguity credit (up to 0.3) instead of a pure zero.
-- **Efficiency (30%):** Tracks steps taken vs. an ideal baseline. (e.g., An easy case should take ≤3 steps; borderline cases permit ≤5 steps).
-- **Information Strategy (20%):** Rewards gathering both income and credit documents on ambiguous cases, while penalizing cautious agents that redundantly request documents for overwhelmingly easy cases.
+That's it! The `MicrofinanceEnv.from_docker_image()` method handles:
+- Starting the Docker container
+- Waiting for the server to be ready
+- Connecting to the environment
+- Container cleanup when you call `close()`
 
-#### Verified Grader Outcomes:
-- `1.000` = Correct outcome + lean strategic execution.
-- `1.000` = Impulsive correct (Succeeds via pure luck on an easy case).
-- `0.635` = Wrong choice but heavily conflicting profile (partial credit salvaged).
-- `0.560` = Impulsive wrong (Immediate failure).
-- `0.200` = Total indecisiveness (Times out).
+## Building the Docker Image
 
-#### LLM Qualitative Grader (Round 2)
-In addition to the programmatic baseline, `Grader.py` provides an LLM harness (`build_llm_grader_prompt`) to critique agent traces qualitatively scoring 0–10 along three vital dimensions:
-1. **Reasoning Quality:** Did the agent identify conflicting signals naturally?
-2. **Decision Accuracy:** Did it gather enough evidence exactly when borderline tension demanded it?
-3. **Financial Inclusion:** Did it factor in the applicant's community tier and avoid rejecting based exclusively on raw income?
+Before using the environment, you need to build the Docker image:
+
+```bash
+# From project root
+docker build -t microfinance_env-env:latest -f server/Dockerfile .
+```
+
+## Deploying to Hugging Face Spaces
+
+You can easily deploy your OpenEnv environment to Hugging Face Spaces using the `openenv push` command:
+
+```bash
+# From the environment directory (where openenv.yaml is located)
+openenv push
+
+# Or specify options
+openenv push --namespace my-org --private
+```
+
+The `openenv push` command will:
+1. Validate that the directory is an OpenEnv environment (checks for `openenv.yaml`)
+2. Prepare a custom build for Hugging Face Docker space (enables web interface)
+3. Upload to Hugging Face (ensuring you're logged in)
+
+### Prerequisites
+
+- Authenticate with Hugging Face: The command will prompt for login if not already authenticated
+
+### Options
+
+- `--directory`, `-d`: Directory containing the OpenEnv environment (defaults to current directory)
+- `--repo-id`, `-r`: Repository ID in format 'username/repo-name' (defaults to 'username/env-name' from openenv.yaml)
+- `--base-image`, `-b`: Base Docker image to use (overrides Dockerfile FROM)
+- `--private`: Deploy the space as private (default: public)
+
+### Examples
+
+```bash
+# Push to your personal namespace (defaults to username/env-name from openenv.yaml)
+openenv push
+
+# Push to a specific repository
+openenv push --repo-id my-org/my-env
+
+# Push with a custom base image
+openenv push --base-image ghcr.io/meta-pytorch/openenv-base:latest
+
+# Push as a private space
+openenv push --private
+
+# Combine options
+openenv push --repo-id my-org/my-env --base-image custom-base:latest --private
+```
+
+After deployment, your space will be available at:
+`https://huggingface.co/spaces/<repo-id>`
+
+The deployed space includes:
+- **Web Interface** at `/web` - Interactive UI for exploring the environment
+- **API Documentation** at `/docs` - Full OpenAPI/Swagger interface
+- **Health Check** at `/health` - Container health monitoring
+- **WebSocket** at `/ws` - Persistent session endpoint for low-latency interactions
+
+## Environment Details
+
+### Action
+**MicrofinanceAction**: Contains a single field
+- `message` (str) - The message to echo back
+
+### Observation
+**MicrofinanceObservation**: Contains the echo response and metadata
+- `echoed_message` (str) - The message echoed back
+- `message_length` (int) - Length of the message
+- `reward` (float) - Reward based on message length (length × 0.1)
+- `done` (bool) - Always False for echo environment
+- `metadata` (dict) - Additional info like step count
+
+### Reward
+The reward is calculated as: `message_length × 0.1`
+- "Hi" → reward: 0.2
+- "Hello, World!" → reward: 1.3
+- Empty message → reward: 0.0
+
+## Advanced Usage
+
+### Connecting to an Existing Server
+
+If you already have a Microfinance Env environment server running, you can connect directly:
+
+```python
+from microfinance_env import MicrofinanceEnv
+
+# Connect to existing server
+microfinance_envenv = MicrofinanceEnv(base_url="<ENV_HTTP_URL_HERE>")
+
+# Use as normal
+result = microfinance_envenv.reset()
+result = microfinance_envenv.step(MicrofinanceAction(message="Hello!"))
+```
+
+Note: When connecting to an existing server, `microfinance_envenv.close()` will NOT stop the server.
+
+### Using the Context Manager
+
+The client supports context manager usage for automatic connection management:
+
+```python
+from microfinance_env import MicrofinanceAction, MicrofinanceEnv
+
+# Connect with context manager (auto-connects and closes)
+with MicrofinanceEnv(base_url="http://localhost:8000") as env:
+    result = env.reset()
+    print(f"Reset: {result.observation.echoed_message}")
+    # Multiple steps with low latency
+    for msg in ["Hello", "World", "!"]:
+        result = env.step(MicrofinanceAction(message=msg))
+        print(f"Echoed: {result.observation.echoed_message}")
+```
+
+The client uses WebSocket connections for:
+- **Lower latency**: No HTTP connection overhead per request
+- **Persistent session**: Server maintains your environment state
+- **Efficient for episodes**: Better for many sequential steps
+
+### Concurrent WebSocket Sessions
+
+The server supports multiple concurrent WebSocket connections. To enable this,
+modify `server/app.py` to use factory mode:
+
+```python
+# In server/app.py - use factory mode for concurrent sessions
+app = create_app(
+    MicrofinanceEnvironment,  # Pass class, not instance
+    MicrofinanceAction,
+    MicrofinanceObservation,
+    max_concurrent_envs=4,  # Allow 4 concurrent sessions
+)
+```
+
+Then multiple clients can connect simultaneously:
+
+```python
+from microfinance_env import MicrofinanceAction, MicrofinanceEnv
+from concurrent.futures import ThreadPoolExecutor
+
+def run_episode(client_id: int):
+    with MicrofinanceEnv(base_url="http://localhost:8000") as env:
+        result = env.reset()
+        for i in range(10):
+            result = env.step(MicrofinanceAction(message=f"Client {client_id}, step {i}"))
+        return client_id, result.observation.message_length
+
+# Run 4 episodes concurrently
+with ThreadPoolExecutor(max_workers=4) as executor:
+    results = list(executor.map(run_episode, range(4)))
+```
+
+## Development & Testing
+
+### Direct Environment Testing
+
+Test the environment logic directly without starting the HTTP server:
+
+```bash
+# From the server directory
+python3 server/microfinance_env_environment.py
+```
+
+This verifies that:
+- Environment resets correctly
+- Step executes actions properly
+- State tracking works
+- Rewards are calculated correctly
+
+### Running Locally
+
+Run the server locally for development:
+
+```bash
+uvicorn server.app:app --reload
+```
+
+## Project Structure
+
+```
+microfinance_env/
+├── .dockerignore         # Docker build exclusions
+├── __init__.py            # Module exports
+├── README.md              # This file
+├── openenv.yaml           # OpenEnv manifest
+├── pyproject.toml         # Project metadata and dependencies
+├── uv.lock                # Locked dependencies (generated)
+├── client.py              # MicrofinanceEnv client
+├── models.py              # Action and Observation models
+└── server/
+    ├── __init__.py        # Server module exports
+    ├── microfinance_env_environment.py  # Core environment logic
+    ├── app.py             # FastAPI application (HTTP + WebSocket endpoints)
+    └── Dockerfile         # Container image definition
+```
