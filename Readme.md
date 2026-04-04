@@ -1,255 +1,196 @@
----
-title: Microfinance Env Environment Server
-emoji: 🎻
-colorFrom: gray
-colorTo: pink
-sdk: docker
-pinned: false
-app_port: 8000
-base_path: /web
-tags:
-  - openenv
+# 🏦 Microfinance Credit Decision Environment (OpenEnv)
+
+An interactive reinforcement learning (RL) environment simulating real-world microfinance loan decisions under uncertainty across a **two-phase loan lifecycle**.
+
+This environment models how loan officers make decisions with incomplete applicant data, and how post-approval monitoring requires strategic interventions to prevent defaults.
+
 ---
 
-# Microfinance Env Environment
+## 🚀 Problem Statement
 
-A simple test environment that echoes back messages. Perfect for testing the env APIs as well as demonstrating environment usage patterns.
+India has millions of microfinance borrowers. Loan officers face two distinct challenges:
+1. **Application Phase**: Working with incomplete data to make risk vs opportunity judgments.
+2. **Monitoring Phase**: Observing noisy repayment signals to identify deteriorating borrowers before they default.
 
-## Quick Start
+This environment simulates that process as a **sequential, long-horizon decision-making problem**.
 
-The simplest way to use the Microfinance Env environment is through the `MicrofinanceEnv` class:
+---
 
-```python
-from microfinance_env import MicrofinanceAction, MicrofinanceEnv
+## 🧠 Key Idea
 
-try:
-    # Create environment from Docker image
-    microfinance_envenv = MicrofinanceEnv.from_docker_image("microfinance_env-env:latest")
+Unlike traditional ML (predict approve/reject in one step), this environment forces the agent to:
+1. **Plan across two phases** with different action spaces.
+2. **Trade off information gathering cost against future signal quality**: Choosing not to verify credit history saves step costs but yields noisy, unreliable payment observations for the next 12 months.
+3. **Execute time-sensitive interventions**: A late reminder has less impact than an early restructure.
 
-    # Reset
-    result = microfinance_envenv.reset()
-    print(f"Reset: {result.observation.echoed_message}")
+---
 
-    # Send multiple messages
-    messages = ["Hello, World!", "Testing echo", "Final message"]
+## ⚙️ Environment Design
 
-    for msg in messages:
-        result = microfinance_envenv.step(MicrofinanceAction(message=msg))
-        print(f"Sent: '{msg}'")
-        print(f"  → Echoed: '{result.observation.echoed_message}'")
-        print(f"  → Length: {result.observation.message_length}")
-        print(f"  → Reward: {result.reward}")
+The episode is divided into two phases.
 
-finally:
-    # Always clean up
-    microfinance_envenv.close()
-```
+### 🔹 Phase 1: Application
+**Action Space**:
+* `APPROVE` (Moves to Phase 2)
+* `REJECT` (Terminates episode)
+* `REQUEST_INCOME_PROOF` 
+* `REQUEST_CREDIT_HISTORY`
+* `FLAG_FOR_REVIEW`
 
-That's it! The `MicrofinanceEnv.from_docker_image()` method handles:
-- Starting the Docker container
-- Waiting for the server to be ready
-- Connecting to the environment
-- Container cleanup when you call `close()`
+**Mechanics**:
+* Start with missing/incomplete fields.
+* Document requests reveal hidden fields but incur step penalties.
+* "Signal Quality" for Phase 2 is determined by the documents collected here.
 
-## Building the Docker Image
+---
 
-Before using the environment, you need to build the Docker image:
+### 🔹 Phase 2: Monitoring (12 Months)
+**Action Space**:
+* `DO_NOTHING`
+* `SEND_REMINDER`
+* `RESTRUCTURE_LOAN`
+* `ESCALATE_TO_RECOVERY` (Terminates episode)
 
-```bash
-# From project root
-docker build -t microfinance_env-env:latest -f server/Dockerfile .
-```
+**Mechanics**:
+* Monthly payment observations are noisy and dependent on Phase 1 "Signal Quality".
+* Interventions modify the borrower's underlying true default probability.
+* Streak accumulations (missed vs on-time payments) dynamically shift the risk band week to week.
+* Terminates upon full repayment (12 months), cumulative default threshold, or manual escalation.
 
-## Deploying to Hugging Face Spaces
+---
 
-You can easily deploy your OpenEnv environment to Hugging Face Spaces using the `openenv push` command:
+### 🔹 Reward Function
 
-```bash
-# From the environment directory (where openenv.yaml is located)
-openenv push
+Includes immediate step costs and terminal outcome rewards.
 
-# Or specify options
-openenv push --namespace my-org --private
-```
+| Event / Action          | Reward |
+| ----------------------- | ------ |
+| Phase 1: Correct Approve | +1.0   |
+| Phase 1: Wrong Approve   | -2.0   |
+| Phase 1: Correct Reject  | +0.6   |
+| Phase 1: Wrong Reject    | -1.0   |
+| Phase 1: Doc Request     | -0.10  |
+| Phase 1: Flag Review     | -0.15  |
+| Phase 2: Loan Repaid     | +1.5   |
+| Phase 2: Loan Default    | -2.5   |
+| Phase 2: Send Reminder   | -0.05  |
+| Phase 2: Restructure     | -0.20  |
+| Phase 2: Escalate        | -0.50  |
 
-The `openenv push` command will:
-1. Validate that the directory is an OpenEnv environment (checks for `openenv.yaml`)
-2. Prepare a custom build for Hugging Face Docker space (enables web interface)
-3. Upload to Hugging Face (ensuring you're logged in)
+---
 
-### Prerequisites
+## 🏗️ Architecture
 
-- Authenticate with Hugging Face: The command will prompt for login if not already authenticated
+* **Server**: FastAPI-based OpenEnv environment
+* **Client**: EnvClient wrapper (`client.py`) that handles dynamic two-phase routing of observations transparently.
+* **Environment Logic**: `microfinance_env_environment.py` with Phase 1 and Phase 2 loops.
+* **Dataset**: Synthetic microfinance profile generator mimicking real-world emerging market dynamics.
+* **Grader**: A programmatic and LLM trajectory-aware grader (`grader.py`).
 
-### Options
+---
 
-- `--directory`, `-d`: Directory containing the OpenEnv environment (defaults to current directory)
-- `--repo-id`, `-r`: Repository ID in format 'username/repo-name' (defaults to 'username/env-name' from openenv.yaml)
-- `--base-image`, `-b`: Base Docker image to use (overrides Dockerfile FROM)
-- `--private`: Deploy the space as private (default: public)
+## 📦 Project Structure
 
-### Examples
-
-```bash
-# Push to your personal namespace (defaults to username/env-name from openenv.yaml)
-openenv push
-
-# Push to a specific repository
-openenv push --repo-id my-org/my-env
-
-# Push with a custom base image
-openenv push --base-image ghcr.io/meta-pytorch/openenv-base:latest
-
-# Push as a private space
-openenv push --private
-
-# Combine options
-openenv push --repo-id my-org/my-env --base-image custom-base:latest --private
-```
-
-After deployment, your space will be available at:
-`https://huggingface.co/spaces/<repo-id>`
-
-The deployed space includes:
-- **Web Interface** at `/web` - Interactive UI for exploring the environment
-- **API Documentation** at `/docs` - Full OpenAPI/Swagger interface
-- **Health Check** at `/health` - Container health monitoring
-- **WebSocket** at `/ws` - Persistent session endpoint for low-latency interactions
-
-## Environment Details
-
-### Action
-**MicrofinanceAction**: Contains a single field
-- `message` (str) - The message to echo back
-
-### Observation
-**MicrofinanceObservation**: Contains the echo response and metadata
-- `echoed_message` (str) - The message echoed back
-- `message_length` (int) - Length of the message
-- `reward` (float) - Reward based on message length (length × 0.1)
-- `done` (bool) - Always False for echo environment
-- `metadata` (dict) - Additional info like step count
-
-### Reward
-The reward is calculated as: `message_length × 0.1`
-- "Hi" → reward: 0.2
-- "Hello, World!" → reward: 1.3
-- Empty message → reward: 0.0
-
-## Advanced Usage
-
-### Connecting to an Existing Server
-
-If you already have a Microfinance Env environment server running, you can connect directly:
-
-```python
-from microfinance_env import MicrofinanceEnv
-
-# Connect to existing server
-microfinance_envenv = MicrofinanceEnv(base_url="<ENV_HTTP_URL_HERE>")
-
-# Use as normal
-result = microfinance_envenv.reset()
-result = microfinance_envenv.step(MicrofinanceAction(message="Hello!"))
-```
-
-Note: When connecting to an existing server, `microfinance_envenv.close()` will NOT stop the server.
-
-### Using the Context Manager
-
-The client supports context manager usage for automatic connection management:
-
-```python
-from microfinance_env import MicrofinanceAction, MicrofinanceEnv
-
-# Connect with context manager (auto-connects and closes)
-with MicrofinanceEnv(base_url="http://localhost:8000") as env:
-    result = env.reset()
-    print(f"Reset: {result.observation.echoed_message}")
-    # Multiple steps with low latency
-    for msg in ["Hello", "World", "!"]:
-        result = env.step(MicrofinanceAction(message=msg))
-        print(f"Echoed: {result.observation.echoed_message}")
-```
-
-The client uses WebSocket connections for:
-- **Lower latency**: No HTTP connection overhead per request
-- **Persistent session**: Server maintains your environment state
-- **Efficient for episodes**: Better for many sequential steps
-
-### Concurrent WebSocket Sessions
-
-The server supports multiple concurrent WebSocket connections. To enable this,
-modify `server/app.py` to use factory mode:
-
-```python
-# In server/app.py - use factory mode for concurrent sessions
-app = create_app(
-    MicrofinanceEnvironment,  # Pass class, not instance
-    MicrofinanceAction,
-    MicrofinanceObservation,
-    max_concurrent_envs=4,  # Allow 4 concurrent sessions
-)
-```
-
-Then multiple clients can connect simultaneously:
-
-```python
-from microfinance_env import MicrofinanceAction, MicrofinanceEnv
-from concurrent.futures import ThreadPoolExecutor
-
-def run_episode(client_id: int):
-    with MicrofinanceEnv(base_url="http://localhost:8000") as env:
-        result = env.reset()
-        for i in range(10):
-            result = env.step(MicrofinanceAction(message=f"Client {client_id}, step {i}"))
-        return client_id, result.observation.message_length
-
-# Run 4 episodes concurrently
-with ThreadPoolExecutor(max_workers=4) as executor:
-    results = list(executor.map(run_episode, range(4)))
-```
-
-## Development & Testing
-
-### Direct Environment Testing
-
-Test the environment logic directly without starting the HTTP server:
-
-```bash
-# From the server directory
-python3 server/microfinance_env_environment.py
-```
-
-This verifies that:
-- Environment resets correctly
-- Step executes actions properly
-- State tracking works
-- Rewards are calculated correctly
-
-### Running Locally
-
-Run the server locally for development:
-
-```bash
-uvicorn server.app:app --reload
-```
-
-## Project Structure
-
-```
+```text
 microfinance_env/
-├── .dockerignore         # Docker build exclusions
-├── __init__.py            # Module exports
-├── README.md              # This file
-├── openenv.yaml           # OpenEnv manifest
-├── pyproject.toml         # Project metadata and dependencies
-├── uv.lock                # Locked dependencies (generated)
-├── client.py              # MicrofinanceEnv client
-├── models.py              # Action and Observation models
-└── server/
-    ├── __init__.py        # Server module exports
-    ├── microfinance_env_environment.py  # Core environment logic
-    ├── app.py             # FastAPI application (HTTP + WebSocket endpoints)
-    └── Dockerfile         # Container image definition
+│
+├── models.py                 # Action, Phase, Observation, State definitions
+├── client.py                 # Client wrapper handling Two-Phase returns
+│
+├── server/
+│   ├── app.py                # FastAPI server (OpenEnv interface)
+│   ├── data_generator.py     # Synthetic dataset generator
+│   ├── grader.py             # Trajectory-aware Grader evaluation
+│   ├── microfinance_env_environment.py # Core environment (Phase 1 & Phase 2)
+│
+├── requirements.txt
+├── openenv.yaml
+├── README.md
+├── ABOUT.md
 ```
+
+## 🧪 Running Locally
+
+### 1. Activate environment
+```bash
+venv\Scripts\activate
+```
+
+### 2. Start server
+```bash
+uvicorn microfinance_env.server.app:app --reload
+```
+Server runs at: `http://localhost:8000`
+
+---
+
+## 🔌 API Endpoints
+
+* `POST /reset` → start new episode
+* `POST /step` → take action
+* `GET /state` → inspect internal state
+* `GET /docs` → Swagger UI
+* `WS /ws` → WebSocket (low latency)
+
+---
+
+## 💻 Example Usage
+
+```python
+import asyncio
+from client import MicrofinanceEnv
+from models import CreditAction
+
+async def main():
+    async with MicrofinanceEnv(base_url="http://localhost:8000") as env:
+        obs = await env.reset()
+        
+        # Phase 1 — application
+        result = await env.step(CreditAction(action_type="REQUEST_INCOME_PROOF"))
+        result = await env.step(CreditAction(action_type="REQUEST_CREDIT_HISTORY"))
+        result = await env.step(CreditAction(action_type="APPROVE", rationale="Looks good"))
+        
+        # Phase 2 — monitoring begins
+        for month in range(12):
+            if result.done:
+                break
+            
+            # Simple intervention policy
+            action = "SEND_REMINDER" if result.observation.cumulative_misses > 0 else "DO_NOTHING"
+            result = await env.step(CreditAction(action_type=action))
+            print(f"Outcome: {result.observation.last_action_result}, Reward: {result.reward}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+---
+
+## 🐳 Docker
+
+```bash
+docker build -t microfinance-env -f server/Dockerfile .
+docker run -p 8000:8000 microfinance-env
+```
+
+---
+
+## ☁️ Deploy (OpenEnv)
+
+```bash
+openenv push
+```
+
+---
+
+## 🎯 Why This Matters
+
+This environment moves beyond static classification to highlight:
+* **Two-Phase Lifecycle Planning**: Short-term Phase 1 decisions carry long-term Phase 2 consequences.
+* **Information Quality vs Cost**: Paying for information directly improves future observational reliability.
+* **Time-Sensitive Interventions**: The timing of an action matters as much as the action itself.
+
+---
+
+## 📌 Status
+🚧 Active Version 2.0 (Two-Phase Implementation complete)
