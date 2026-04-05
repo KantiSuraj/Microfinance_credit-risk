@@ -1,20 +1,19 @@
 spec_version: 1
-name: microfinance_env
+name: microfinance-env
 type: space
 runtime: fastapi
 app: server.app:app
 port: 8000
 
-name: microfinance-env
 version: 0.1.0
 description: >
-  Microfinance Credit Decision Environment for RL post-training.
-  An agent must approve or reject micro-loan applications in India
-  with partial information, learning to strategically request documents
-  before making a decision. Features conflicting signals, borderline
-  cases, and noisy labels to prevent trivial classification shortcuts.
+  Two-phase Microfinance Credit Decision Environment for RL post-training.
+  Phase 1: approve or reject micro-loan applications with partial information,
+  strategically requesting documents. Phase 2: monitor monthly repayments
+  under noisy signals and intervene to prevent defaults. Features conflicting
+  signals, borderline cases, and noisy labels to prevent trivial shortcuts.
 
-author: Suraj Kanti 
+author: Suraj Kanti
 
 action_class: CreditAction
 observation_class: ApplicantObservation
@@ -27,10 +26,43 @@ tags:
   - partial-observability
   - multi-step
   - real-world
+  - two-phase
+  - sequential-decision-making
 
-reward_range: [-2.15, 1.0]
-max_steps: 7
+reward_range: [-3.0, 2.5]
+max_steps: 19  # 7 Phase 1 + 12 Phase 2
+
+tasks:
+  basic_lending:
+    description: >
+      Easy: Minimal reasoning required. Most applicant information is
+      pre-revealed (income visible from start). Clear approve/reject signal
+      with unambiguous applicants. Short 6-month monitoring phase.
+    difficulty: easy
+    grader: deterministic
+    score_range: [0.0, 1.0]
+
+  noisy_signals:
+    description: >
+      Medium: Strategic information gathering under uncertainty. Applicants
+      have conflicting features (high income + bad history or vice versa).
+      Key info hidden — agent must request the RIGHT documents. Redundant
+      or wrong doc requests incur extra penalties. Full 12-month Phase 2.
+    difficulty: medium
+    grader: deterministic
+    score_range: [0.0, 1.0]
+
+  adversarial_portfolio:
+    description: >
+      Hard: Long-term reasoning and timely intervention. Borderline approval
+      case where Phase 2 is the real challenge — elevated default risk,
+      capped signal quality (0.75 max), tighter failure threshold (3 misses).
+      Recovery only possible with precisely timed interventions.
+    difficulty: hard
+    grader: deterministic
+    score_range: [0.0, 1.0]
 
 environment_variables:
   DATASET_SIZE: "300"
   SEED: "42"
+  TASK_NAME: "basic_lending"

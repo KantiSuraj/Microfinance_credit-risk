@@ -59,6 +59,16 @@ The episode is divided into two phases.
 
 ---
 
+## 🎯 Tasks (3 Difficulty Levels)
+
+| Task | Difficulty | What It Tests |
+|------|-----------|---------------|
+| `basic_lending` | Easy | Minimal reasoning. Income pre-revealed, clear signals, 6-month Phase 2. |
+| `noisy_signals` | Medium | Strategic information gathering. Conflicting features, extra penalty for wrong doc requests. |
+| `adversarial_portfolio` | Hard | Long-horizon intervention timing. Borderline approval, elevated risk, capped signal quality (0.75 max), 3-miss default threshold. |
+
+---
+
 ### 🔹 Reward Function
 
 Includes immediate step costs and terminal outcome rewards.
@@ -94,17 +104,21 @@ Includes immediate step costs and terminal outcome rewards.
 ```text
 microfinance_env/
 │
+├── inference.py              # Baseline LLM inference (runs all 3 tasks)
 ├── models.py                 # Action, Phase, Observation, State definitions
 ├── client.py                 # Client wrapper handling Two-Phase returns
+├── openenv.yaml              # OpenEnv spec (tasks, metadata)
 │
 ├── server/
 │   ├── app.py                # FastAPI server (OpenEnv interface)
 │   ├── data_generator.py     # Synthetic dataset generator
 │   ├── grader.py             # Trajectory-aware Grader evaluation
+│   ├── reward_engine.py      # Isolated reward computation module
 │   ├── microfinance_env_environment.py # Core environment (Phase 1 & Phase 2)
+│   └── Dockerfile            # Container deployment
 │
+├── test_env.py               # Standalone test suite
 ├── requirements.txt
-├── openenv.yaml
 ├── README.md
 ├── ABOUT.md
 ```
@@ -193,4 +207,4 @@ This environment moves beyond static classification to highlight:
 ---
 
 ## 📌 Status
-🚧 Active Version 2.0 (Two-Phase Implementation complete)
+✅ Version 2.0 — Two-Phase Implementation complete. Ready for submission.

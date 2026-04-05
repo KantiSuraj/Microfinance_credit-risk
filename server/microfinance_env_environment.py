@@ -7,6 +7,11 @@ Architecture (per checklist):
   ✅ Reward isolation     — all reward logic lives in reward_engine.py
   ✅ step() stays clean   — routes, never computes reward itself
 
+Task difficulty levels:
+  • basic_lending       — Easy:  pre-revealed info, clear signals, short Phase 2
+  • noisy_signals       — Medium: conflicting features, strategic doc gathering
+  • adversarial_portfolio — Hard: borderline approval, long Phase 2, intervention timing
+
 Self-test guarantees (verified by test suite):
   ✓ Test 1: Blind APPROVE always negative in expectation
   ✓ Test 2: No single strategy dominates — info cost vs confidence trade-off
@@ -17,22 +22,102 @@ from __future__ import annotations
 import random
 import uuid
 from typing import Optional
+from dataclasses import dataclass
 
 from openenv.core.env_server import Environment
 from openenv.core.env_server.types import State
 
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add both project root and server/ dir for clean imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))          # server/
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 
 from models import (
     CreditAction, ApplicantObservation, MonitoringObservation,
     MicrofinanceState, Phase, PaymentStatus,
 )
-from server.data_generator import generate_dataset, ApplicantProfile, SENIOR_COMMENTS
+from server.data_generator import generate_dataset, generate_applicant, ApplicantProfile, SENIOR_COMMENTS
 import reward_engine as RE
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# Task Configuration — each task tests a DIFFERENT reasoning skill
+# ══════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class TaskConfig:
+    """Structural configuration that changes what the agent must reason about."""
+    name: str
+    description: str
+    # Phase 1 configuration
+    pre_reveal_income: bool = False       # income visible from the start
+    pre_reveal_credit: bool = False       # credit history visible from start
+    force_conflicting: bool = False       # force conflicting-signal applicants
+    force_borderline: bool = False        # force borderline applicants
+    force_clear_case: bool = False        # force unambiguous applicants
+    extra_doc_penalty: float = 0.0        # additional penalty for wrong doc requests
+    # Phase 2 configuration
+    phase2_months: int = 12               # monitoring duration
+    elevated_base_risk: float = 0.0       # added to base default probability
+    signal_quality_cap: float = 0.90      # max signal quality achievable
+    default_threshold: int = 4            # misses before auto-default
+    # General
+    max_phase1_steps: int = 7
+    seed: int = 42
+
+
+# ── Task presets ──────────────────────────────────────────────────────────
+
+TASK_CONFIGS = {
+    "basic_lending": TaskConfig(
+        name="basic_lending",
+        description=(
+            "Easy: Minimal reasoning. Most applicant info is pre-revealed. "
+            "Clear approve/reject signal. Short 6-month monitoring phase."
+        ),
+        pre_reveal_income=True,       # agent already sees income
+        force_clear_case=True,        # low-ambiguity applicant
+        phase2_months=6,              # short monitoring
+        signal_quality_cap=0.90,
+        default_threshold=4,
+        seed=42,
+    ),
+    "noisy_signals": TaskConfig(
+        name="noisy_signals",
+        description=(
+            "Medium: Conflicting features (high income + bad history or vice versa). "
+            "Key info hidden. Must request the RIGHT documents — wrong requests penalized."
+        ),
+        force_conflicting=True,       # conflicting applicant signals
+        extra_doc_penalty=-0.08,      # extra cost for each redundant/wrong doc request
+        phase2_months=12,
+        signal_quality_cap=0.90,
+        default_threshold=4,
+        seed=137,
+    ),
+    "adversarial_portfolio": TaskConfig(
+        name="adversarial_portfolio",
+        description=(
+            "Hard: Borderline approval case. Phase 2 is the real challenge — "
+            "elevated default risk, capped signal quality, recovery only possible "
+            "with precisely timed interventions."
+        ),
+        force_borderline=True,        # borderline applicant
+        phase2_months=12,
+        elevated_base_risk=0.12,      # +12% base default probability
+        signal_quality_cap=0.75,      # noisy observations regardless of docs
+        default_threshold=3,          # tighter failure threshold
+        seed=256,
+    ),
+}
+
+DEFAULT_TASK = "basic_lending"
+
+
+# ── Global constants ──────────────────────────────────────────────────────
+
 MAX_PHASE1_STEPS         = 7
-MAX_MONITORING_MONTHS    = 12
+DEFAULT_MONITORING_MONTHS = 12
 DEFAULT_THRESHOLD_MISSES = 4
 
 MISSED_STREAK_RISK  = +0.04
@@ -46,16 +131,43 @@ def _signal_quality(income_revealed: bool, credit_revealed: bool) -> float:
 
 class MicrofinanceEnvironment(Environment):
 
-    def __init__(self, dataset_size: int = 300, seed: int = 42):
+    def __init__(self, dataset_size: int = 300, seed: int = 42, task_name: str = DEFAULT_TASK):
         super().__init__()
-        self._dataset = generate_dataset(n=dataset_size, seed=seed)
-        self._rng     = random.Random(seed)
+        self._task_config = TASK_CONFIGS.get(task_name, TASK_CONFIGS[DEFAULT_TASK])
+        tc = self._task_config
+        # Use caller's seed if explicitly provided, otherwise fall back to task config
+        effective_seed = seed if seed != 42 else tc.seed
+        self._dataset = generate_dataset(n=dataset_size, seed=effective_seed)
+        self._rng     = random.Random(effective_seed)
         self._profile : Optional[ApplicantProfile]  = None
         self._state   : Optional[MicrofinanceState] = None
 
     def reset(self) -> ApplicantObservation:
-        self._profile = self._rng.choice(self._dataset)
+        tc = self._task_config
+
+        # ── Select applicant based on task structural requirements ─────────
+        if tc.force_clear_case:
+            # Easy: pick an unambiguous applicant (prob far from 0.5)
+            candidates = [p for p in self._dataset
+                          if abs(p.true_default_probability - 0.5) > 0.25
+                          and not p.has_conflicting_signal]
+            self._profile = self._rng.choice(candidates) if candidates else self._rng.choice(self._dataset)
+        elif tc.force_conflicting:
+            # Medium: pick a conflicting-signal applicant
+            candidates = [p for p in self._dataset if p.has_conflicting_signal]
+            self._profile = self._rng.choice(candidates) if candidates else self._rng.choice(self._dataset)
+        elif tc.force_borderline:
+            # Hard: pick a borderline applicant
+            candidates = [p for p in self._dataset if p.is_borderline]
+            self._profile = self._rng.choice(candidates) if candidates else self._rng.choice(self._dataset)
+        else:
+            self._profile = self._rng.choice(self._dataset)
+
         p = self._profile
+
+        # ── Apply task-level risk elevation ────────────────────────────────
+        base_default_prob = min(0.95, p.true_default_probability + tc.elevated_base_risk)
+
         self._state = MicrofinanceState(
             episode_id=str(uuid.uuid4()), step_count=0,
             phase=Phase.APPLICATION,
@@ -65,10 +177,12 @@ class MicrofinanceEnvironment(Environment):
             hidden_past_defaults=p.past_defaults,
             hidden_repayment_streak=p.repayment_streak,
             hidden_income_stability=p.income_source_stability,
-            income_revealed=False, credit_history_revealed=False, senior_review_done=False,
+            income_revealed=tc.pre_reveal_income,
+            credit_history_revealed=tc.pre_reveal_credit,
+            senior_review_done=False,
             cumulative_step_penalty=0.0, phase1_reward=None,
-            signal_quality=None, current_default_prob=p.true_default_probability,
-            months_completed=0, total_months=MAX_MONITORING_MONTHS,
+            signal_quality=None, current_default_prob=base_default_prob,
+            months_completed=0, total_months=tc.phase2_months,
             payment_history=[], intervention_history=[],
             missed_streak=0, ontime_streak=0, cumulative_misses=0,
             phase2_intervention_costs=0.0, terminal_reward=None,
@@ -97,12 +211,13 @@ class MicrofinanceEnvironment(Environment):
         s, p  = self._state, self._profile
         atype = action.action_type
 
-        if s.step_count >= MAX_PHASE1_STEPS and atype not in ("APPROVE", "REJECT"):
+        tc = self._task_config
+        if s.step_count >= tc.max_phase1_steps and atype not in ("APPROVE", "REJECT"):
             reward = RE.phase1_timeout_reward(s.cumulative_step_penalty)
             s.terminal_reward = reward
             s.phase = Phase.TERMINAL
             return self._obs_phase1(
-                f"⚠ Timeout after {MAX_PHASE1_STEPS} steps. Auto-rejected. "
+                f"⚠ Timeout after {tc.max_phase1_steps} steps. Auto-rejected. "
                 f"Ground truth: {p.ground_truth_label}. Reward: {reward:+.3f}.",
                 done=True, reward=reward,
             )
@@ -110,6 +225,8 @@ class MicrofinanceEnvironment(Environment):
         if atype == "REQUEST_INCOME_PROOF":
             if s.income_revealed:
                 msg = "Income proof already on file. No new information revealed."
+                # Extra penalty for redundant request in noisy_signals task
+                s.cumulative_step_penalty += tc.extra_doc_penalty
             else:
                 s.income_revealed = True
                 s.cumulative_step_penalty += RE.DOC_REQUEST_COST
@@ -123,6 +240,7 @@ class MicrofinanceEnvironment(Environment):
         elif atype == "REQUEST_CREDIT_HISTORY":
             if s.credit_history_revealed:
                 msg = "Credit history already on file. No new information revealed."
+                s.cumulative_step_penalty += tc.extra_doc_penalty
             else:
                 s.credit_history_revealed = True
                 s.cumulative_step_penalty += RE.DOC_REQUEST_COST
@@ -149,7 +267,8 @@ class MicrofinanceEnvironment(Environment):
                 s.cumulative_step_penalty,
             )
             s.phase1_reward  = reward
-            s.signal_quality = _signal_quality(s.income_revealed, s.credit_history_revealed)
+            raw_sq = _signal_quality(s.income_revealed, s.credit_history_revealed)
+            s.signal_quality = min(raw_sq, tc.signal_quality_cap)  # task caps max quality
             s.phase          = Phase.MONITORING
             conf             = RE.info_confidence(s.income_revealed, s.credit_history_revealed)
             correct          = p.ground_truth_label == "APPROVE"
@@ -241,7 +360,8 @@ class MicrofinanceEnvironment(Environment):
                 done=True, reward=reward,
             )
 
-        if s.cumulative_misses >= DEFAULT_THRESHOLD_MISSES:
+        tc = self._task_config
+        if s.cumulative_misses >= tc.default_threshold:
             reward = RE.phase2_terminal_reward(
                 s.phase1_reward, "DEFAULT", s.phase2_intervention_costs
             )
@@ -253,7 +373,7 @@ class MicrofinanceEnvironment(Environment):
                 done=True, reward=reward,
             )
 
-        if s.months_completed >= MAX_MONITORING_MONTHS:
+        if s.months_completed >= tc.phase2_months:
             reward = RE.phase2_terminal_reward(
                 s.phase1_reward, "REPAID", s.phase2_intervention_costs
             )
@@ -267,8 +387,8 @@ class MicrofinanceEnvironment(Environment):
 
         return self._obs_phase2(
             month, observed_status,
-            f"Month {month}/{MAX_MONITORING_MONTHS}. Observed: {observed_status.value}. "
-            f"Misses: {s.cumulative_misses}. {MAX_MONITORING_MONTHS - month} remaining. {note}",
+            f"Month {month}/{tc.phase2_months}. Observed: {observed_status.value}. "
+            f"Misses: {s.cumulative_misses}. {tc.phase2_months - month} remaining. {note}",
             done=False,
             reward=(s.phase1_reward or 0.0) + s.phase2_intervention_costs,
         )
@@ -294,7 +414,7 @@ class MicrofinanceEnvironment(Environment):
             past_defaults=p.past_defaults            if s.credit_history_revealed  else None,
             repayment_streak=p.repayment_streak      if s.credit_history_revealed  else None,
             senior_review_comment=None,
-            step_count=s.step_count, max_steps=MAX_PHASE1_STEPS,
+            step_count=s.step_count, max_steps=self._task_config.max_phase1_steps,
             documents_submitted=docs,
             info_confidence=RE.info_confidence(s.income_revealed, s.credit_history_revealed),
             current_phase=s.phase.value,
@@ -305,7 +425,7 @@ class MicrofinanceEnvironment(Environment):
         s = self._state
         return MonitoringObservation(
             month_number=month,
-            months_remaining=MAX_MONITORING_MONTHS - month,
+            months_remaining=self._task_config.phase2_months - month,
             observed_payment=observed_status.value,
             signal_quality=s.signal_quality,
             current_default_prob_hidden=s.current_default_prob,

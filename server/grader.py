@@ -272,3 +272,46 @@ def build_llm_prompt(episode_log: dict) -> tuple[str, str]:
 Evaluate this trajectory across all four dimensions and return JSON only.
 """.strip()
     return LLM_GRADER_SYSTEM, user
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ALIASES & BATCH UTILITIES (used by test_env.py)
+# ══════════════════════════════════════════════════════════════════════════
+
+# Alias so test_env.py can `from server.grader import programmatic_grade`
+programmatic_grade = grade_trajectory
+
+
+def batch_evaluate(episode_logs: List[dict]) -> dict:
+    """
+    Evaluate a batch of episode logs and return aggregate statistics.
+
+    Returns a dict with:
+      n_episodes, mean_score, median_score, min_score, max_score,
+      pass_rate, mean_phase1, mean_phase2, mean_timing, mean_info_flow
+    """
+    grades = [grade_trajectory(log) for log in episode_logs]
+    scores = [g.score for g in grades]
+    n = len(scores)
+    if n == 0:
+        return {"n_episodes": 0}
+
+    sorted_scores = sorted(scores)
+    median = (
+        sorted_scores[n // 2]
+        if n % 2 == 1
+        else (sorted_scores[n // 2 - 1] + sorted_scores[n // 2]) / 2
+    )
+
+    return {
+        "n_episodes":    n,
+        "mean_score":    round(sum(scores) / n, 4),
+        "median_score":  round(median, 4),
+        "min_score":     round(min(scores), 4),
+        "max_score":     round(max(scores), 4),
+        "pass_rate":     round(sum(1 for g in grades if g.passed) / n, 3),
+        "mean_phase1":   round(sum(g.phase1_score for g in grades) / n, 4),
+        "mean_phase2":   round(sum(g.phase2_score for g in grades) / n, 4),
+        "mean_timing":   round(sum(g.timing_score for g in grades) / n, 4),
+        "mean_info_flow": round(sum(g.info_flow_score for g in grades) / n, 4),
+    }

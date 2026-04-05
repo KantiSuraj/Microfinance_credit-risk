@@ -10,15 +10,18 @@ Key additions vs v1:
   - PaymentStatus enum : ON_TIME | LATE | MISSED
   - MonitoringObservation: Phase 2 observation type
   - MicrofinanceState  : extended with all Phase 2 tracking fields
+
+NOTE: Action, Observation, State from openenv are Pydantic BaseModels.
+      Do NOT use @dataclass on subclasses — use plain Pydantic field syntax.
 """
 
 from __future__ import annotations
 from typing import Optional, List, Literal
-from dataclasses import dataclass, field
 from enum import Enum
+from pydantic import Field
 from openenv.core.env_server import Action, Observation, State
-
-
+ 
+ 
 # ── Enums ──────────────────────────────────────────────────────────────────
  
 class Phase(Enum):
@@ -48,7 +51,6 @@ ActionType = Literal[
 ]
  
  
-@dataclass
 class CreditAction(Action):
     action_type: ActionType = "DO_NOTHING"
     rationale: str = ""
@@ -56,7 +58,6 @@ class CreditAction(Action):
  
 # ── Phase 1 Observation ────────────────────────────────────────────────────
  
-@dataclass
 class ApplicantObservation(Observation):
     """Partial applicant profile. Fields are None until revealed by doc requests."""
     # Always visible
@@ -77,14 +78,14 @@ class ApplicantObservation(Observation):
     # Step metadata
     step_count             : int            = 0
     max_steps              : int            = 7
-    documents_submitted    : List[str]      = field(default_factory=list)
+    documents_submitted    : List[str]      = Field(default_factory=list)
+    info_confidence        : float          = 0.0   # [0,1] — shown to agent
     current_phase          : str            = "APPLICATION"
     last_action_result     : str            = ""
  
  
 # ── Phase 2 Observation ────────────────────────────────────────────────────
  
-@dataclass
 class MonitoringObservation(Observation):
     """
     Monthly repayment monitoring observation.
@@ -103,20 +104,23 @@ class MonitoringObservation(Observation):
     cumulative_misses   : int         = 0
     missed_streak       : int         = 0
     ontime_streak       : int         = 0
-    payment_history     : List[str]   = field(default_factory=list)
-    intervention_history: List[str]   = field(default_factory=list)
+    payment_history     : List[str]   = Field(default_factory=list)
+    intervention_history: List[str]   = Field(default_factory=list)
     current_phase       : str         = "MONITORING"
     last_action_result  : str         = ""
  
  
 # ── Full Episode State (includes hidden ground truth) ─────────────────────
  
-@dataclass
 class MicrofinanceState(State):
     """
     Complete episode state. Ground truth fields are never sent to the agent
     directly — they live here for the server's reward computation and grader.
     """
+    # ── Episode tracking ───────────────────────────────────────────────────
+    episode_id           : Optional[str] = None
+    step_count           : int         = 0
+ 
     # ── Phase tracking ─────────────────────────────────────────────────────
     phase                : Phase      = Phase.APPLICATION
  
@@ -142,11 +146,12 @@ class MicrofinanceState(State):
     current_default_prob       : float  = 0.5
     months_completed           : int    = 0
     total_months               : int    = 12
-    payment_history            : List[str] = field(default_factory=list)
-    intervention_history       : List[str] = field(default_factory=list)
+    payment_history            : List[str] = Field(default_factory=list)
+    intervention_history       : List[str] = Field(default_factory=list)
     missed_streak              : int    = 0
     ontime_streak              : int    = 0
     cumulative_misses          : int    = 0
+    phase2_intervention_costs  : float  = 0.0
  
     # ── Terminal ───────────────────────────────────────────────────────────
     terminal_reward            : Optional[float] = None

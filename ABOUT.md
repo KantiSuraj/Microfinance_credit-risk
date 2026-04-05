@@ -52,3 +52,19 @@ In addition to the programmatic baseline, `grader.py` features an LLM harness to
 2. **Phase 2 Management:** Did it interpret noise effectively and deploy optimal intervention typologies?
 3. **Trajectory Coherence:** Is there evidence the agent traded off Phase 1 costs against Phase 2 observational quality?
 4. **Financial Inclusion:** Did the agent avoid over-rejecting based on raw income alone?
+
+
+python test_env.py. Here's what each test validates:
+
+| Test                     | What It Attacks                                   | Why It Matters                     |
+|--------------------------|--------------------------------------------------|------------------------------------|
+| 1. Blind approve loses   | Can the agent always approve and win?            | Anti-exploit                       |
+| 2. Grader non-constant   | Does grader always return the same score?        | Disqualification check             |
+| 3. Determinism           | Same seed = same result?                         | Reproducibility requirement        |
+| 4. Signal quality        | Does the noise mechanic actually work?           | Core design claim                  |
+| 5. Strategy > impulse    | Does gathering docs actually help?               | RL signal validity                 |
+| 6. Phase 1→2 causality   | Do Phase 1 choices affect Phase 2?               | Two-phase claim                    |
+| 7. Intervention timing   | Does reactive beat passive?                      | Sequential reasoning               |
+| 8. Invalid actions       | Wrong-phase actions crash?                       | Robustness                         |
+| 9. Task difficulty       | Easy > Hard scores?                             | Structural variation               |
+| 10. Score distribution   | Scores well-spread [0, 1]?                       | Meaningful reward signal           |

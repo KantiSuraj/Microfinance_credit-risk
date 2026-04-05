@@ -17,20 +17,27 @@ The /state endpoint always returns MicrofinanceState regardless of phase.
 import sys
 import os
 
-# Ensure the env root is on the path (mirrors PYTHONPATH in Dockerfile)
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Ensure both server/ dir and project root are on the path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))           # server/
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 
 from openenv.core.env_server import create_fastapi_app
 from models import CreditAction, ApplicantObservation
 from microfinance_env_environment import MicrofinanceEnvironment
 
 # ── Instantiate environment ────────────────────────────────────────────────
-# DATASET_SIZE and SEED are read from env vars so the Dockerfile can
-# override them without rebuilding the image.
+# DATASET_SIZE, SEED, and TASK_NAME are read from env vars so the Dockerfile
+# can override them without rebuilding the image.
 _dataset_size = int(os.environ.get("DATASET_SIZE", "300"))
 _seed         = int(os.environ.get("SEED", "42"))
+_task_name    = os.environ.get("TASK_NAME", "basic_lending")
 
-env = MicrofinanceEnvironment(dataset_size=_dataset_size, seed=_seed)
+# create_fastapi_app expects a callable (factory).
+# We create one instance and always return it so /reset and /step share state.
+_env_instance = MicrofinanceEnvironment(dataset_size=_dataset_size, seed=_seed, task_name=_task_name)
+
+def _env_factory():
+    return _env_instance
 
 # ── Create the ASGI app ────────────────────────────────────────────────────
-app = create_fastapi_app(env, CreditAction, ApplicantObservation)
+app = create_fastapi_app(_env_factory, CreditAction, ApplicantObservation)
