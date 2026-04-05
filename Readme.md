@@ -69,23 +69,30 @@ The episode is divided into two phases.
 
 ---
 
-### 🔹 Reward Function
+### 🔹 Reward Function (v2.1 — Anti-Hack Hardened)
 
-Includes immediate step costs and terminal outcome rewards.
+Multi-objective reward with escalating penalties to prevent exploitation.
 
-| Event / Action          | Reward |
-| ----------------------- | ------ |
-| Phase 1: Correct Approve | +1.0   |
-| Phase 1: Wrong Approve   | -2.0   |
-| Phase 1: Correct Reject  | +0.6   |
-| Phase 1: Wrong Reject    | -1.0   |
-| Phase 1: Doc Request     | -0.10  |
-| Phase 1: Flag Review     | -0.15  |
-| Phase 2: Loan Repaid     | +1.5   |
-| Phase 2: Loan Default    | -2.5   |
-| Phase 2: Send Reminder   | -0.05  |
-| Phase 2: Restructure     | -0.20  |
-| Phase 2: Escalate        | -0.50  |
+| Event / Action              | Reward    | Notes |
+| --------------------------- | --------- | ----- |
+| Correct Approve (informed)  | +1.00     | Scales with info confidence |
+| Correct Approve (blind)     | -0.30     | Must gather evidence first |
+| Wrong Approve               | -2.15     | Harsh — bad approval |
+| Correct Reject (informed)   | +0.65     | Well-justified rejection |
+| Correct Reject (blind)      | -0.15     | Discouraged — lazy reject penalty |
+| Wrong Reject                | -1.00     | Missed legitimate borrower |
+| Uninformed decision (conf=0)| -0.10     | Any blind decision penalized |
+| Doc Request                 | -0.10×esc | Escalates with step number |
+| Flag Review                 | -0.15×esc | Escalates with step number |
+| Over-requesting (3rd+ doc)  | -0.12     | Diminishing returns |
+| Redundant action (1st/2nd/3rd)| -0.10/-0.18/-0.26 | Escalating spam penalty |
+| Phase 2: Loan Repaid        | +1.50     | |
+| Phase 2: Loan Default       | -2.50     | |
+| Phase 2: Send Reminder      | -0.05     | Spam penalty at 2+ consecutive |
+| Phase 2: Restructure        | -0.20     | |
+| Phase 2: Escalate           | -0.50     | |
+| Phase 2: Inaction (danger)  | -0.12     | Doubles when streak ≥ 2 |
+| Phase 2: Monotonic strategy | -0.04×esc | 4+ consecutive same action |
 
 ---
 
@@ -112,12 +119,14 @@ microfinance_env/
 ├── server/
 │   ├── app.py                # FastAPI server (OpenEnv interface)
 │   ├── data_generator.py     # Synthetic dataset generator
-│   ├── grader.py             # Trajectory-aware Grader evaluation
-│   ├── reward_engine.py      # Isolated reward computation module
+│   ├── grader.py             # 5-dimension trajectory grader (v2)
+│   ├── reward_engine.py      # Anti-hack hardened reward computation
+│   ├── counterfactual.py     # Soft counterfactual oracle (v2)
+│   ├── episode_logger.py     # Episode sampling & pattern detection (v2)
 │   ├── microfinance_env_environment.py # Core environment (Phase 1 & Phase 2)
 │   └── Dockerfile            # Container deployment
 │
-├── test_env.py               # Standalone test suite
+├── test_env.py               # 22-test adversarial suite (54 checks)
 ├── requirements.txt
 ├── README.md
 ├── ABOUT.md
@@ -197,14 +206,35 @@ openenv push
 
 ---
 
+## 🛡️ Anti-Reward-Hacking (v2.1)
+
+The environment implements **9 strategies** to make reward hacking extremely difficult:
+
+| # | Strategy | Mechanism |
+|---|----------|-----------|
+| 1 | Multi-Objective Reward | 5-dimension grader (P1 30%, P2 35%, timing 10%, info flow 10%, info sufficiency 15%) |
+| 2 | Counterfactual Testing | Soft oracle penalizes decisions when agent had enough info to know better |
+| 3 | Redundancy Detection | Escalating penalties for repeated useless actions |
+| 4 | Step Budget | Efficiency U-curve — both rushing and over-investigating are penalized |
+| 5 | Diversity Testing | Verified across 4 seed ranges × 25 seeds each |
+| 6 | Episode Logging | Automatic pattern detection flags degenerate strategies |
+| 7 | Independent Audit | 8-flag secondary validator catches exploit patterns |
+| 8 | Behavioral Baselines | Strict ordering: informed > random > blind > always-reject |
+| 9 | Adversarial Cases | No fixed strategy averages > 0.70 across 50 seeds |
+
+**Test suite**: 22 tests, 54 checks — all passing.
+
+---
+
 ## 🎯 Why This Matters
 
 This environment moves beyond static classification to highlight:
 * **Two-Phase Lifecycle Planning**: Short-term Phase 1 decisions carry long-term Phase 2 consequences.
 * **Information Quality vs Cost**: Paying for information directly improves future observational reliability.
 * **Time-Sensitive Interventions**: The timing of an action matters as much as the action itself.
+* **Anti-Exploitation by Design**: No lazy or dumb strategy can consistently score well.
 
 ---
 
 ## 📌 Status
-✅ Version 2.0 — Two-Phase Implementation complete. Ready for submission.
+✅ Version 2.1 — Anti-Reward-Hacking hardened. 54/54 adversarial checks passing.

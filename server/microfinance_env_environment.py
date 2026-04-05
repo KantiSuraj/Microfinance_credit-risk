@@ -224,41 +224,72 @@ class MicrofinanceEnvironment(Environment):
 
         if atype == "REQUEST_INCOME_PROOF":
             if s.income_revealed:
-                msg = "Income proof already on file. No new information revealed."
-                # Extra penalty for redundant request in noisy_signals task
-                s.cumulative_step_penalty += tc.extra_doc_penalty
+                # Anti-hack: ESCALATING redundant penalty
+                s.redundant_actions += 1
+                penalty = RE.redundant_action_penalty(s.redundant_actions)
+                s.cumulative_step_penalty += penalty
+                s.cumulative_step_penalty += tc.extra_doc_penalty  # task-specific too
+                msg = (
+                    f"Income proof already on file. Redundant request #{s.redundant_actions}. "
+                    f"Penalty: {penalty:+.3f}."
+                )
             else:
                 s.income_revealed = True
-                s.cumulative_step_penalty += RE.DOC_REQUEST_COST
+                s.docs_requested_count += 1
+                # Anti-hack: ESCALATING step cost
+                cost = RE.escalating_step_cost(RE.DOC_REQUEST_COST, s.step_count)
+                s.cumulative_step_penalty += cost
                 conf = RE.info_confidence(s.income_revealed, s.credit_history_revealed)
                 msg = (
                     f"Income proof received. ₹{p.monthly_income:,.0f}/month "
                     f"({p.income_source_stability} income). "
-                    f"Confidence now {conf:.0%}. Cost: {RE.DOC_REQUEST_COST}."
+                    f"Confidence now {conf:.0%}. Cost: {cost:+.3f}."
                 )
 
         elif atype == "REQUEST_CREDIT_HISTORY":
             if s.credit_history_revealed:
-                msg = "Credit history already on file. No new information revealed."
+                s.redundant_actions += 1
+                penalty = RE.redundant_action_penalty(s.redundant_actions)
+                s.cumulative_step_penalty += penalty
                 s.cumulative_step_penalty += tc.extra_doc_penalty
+                msg = (
+                    f"Credit history already on file. Redundant request #{s.redundant_actions}. "
+                    f"Penalty: {penalty:+.3f}."
+                )
             else:
                 s.credit_history_revealed = True
-                s.cumulative_step_penalty += RE.DOC_REQUEST_COST
+                s.docs_requested_count += 1
+                cost = RE.escalating_step_cost(RE.DOC_REQUEST_COST, s.step_count)
+                s.cumulative_step_penalty += cost
                 conf = RE.info_confidence(s.income_revealed, s.credit_history_revealed)
                 msg = (
                     f"Credit history received. {p.previous_loans} prior loans, "
                     f"{p.past_defaults} defaults, {p.repayment_streak}-month streak. "
-                    f"Confidence now {conf:.0%}. Cost: {RE.DOC_REQUEST_COST}."
+                    f"Confidence now {conf:.0%}. Cost: {cost:+.3f}."
                 )
 
         elif atype == "FLAG_FOR_REVIEW":
             if s.senior_review_done:
-                msg = "Already escalated."
+                s.redundant_actions += 1
+                penalty = RE.redundant_action_penalty(s.redundant_actions)
+                s.cumulative_step_penalty += penalty
+                msg = (
+                    f"Already escalated. Redundant request #{s.redundant_actions}. "
+                    f"Penalty: {penalty:+.3f}."
+                )
             else:
                 s.senior_review_done = True
-                s.cumulative_step_penalty += RE.FLAG_REVIEW_COST
+                s.docs_requested_count += 1
+                cost = RE.escalating_step_cost(RE.FLAG_REVIEW_COST, s.step_count)
+                s.cumulative_step_penalty += cost
+                # Anti-hack: OVER-REQUESTING if this is the 3rd+ request
+                if s.docs_requested_count >= 3:
+                    s.cumulative_step_penalty += RE.OVER_REQUEST_PENALTY
+                    msg_suffix = f" Over-research penalty: {RE.OVER_REQUEST_PENALTY}."
+                else:
+                    msg_suffix = ""
                 comment = self._rng.choice(SENIOR_COMMENTS[p.risk_band])
-                msg = f"Senior review: '{comment}'. Cost: {RE.FLAG_REVIEW_COST}."
+                msg = f"Senior review: '{comment}'. Cost: {cost:+.3f}.{msg_suffix}"
 
         elif atype == "APPROVE":
             reward = RE.phase1_terminal_reward(
@@ -268,7 +299,7 @@ class MicrofinanceEnvironment(Environment):
             )
             s.phase1_reward  = reward
             raw_sq = _signal_quality(s.income_revealed, s.credit_history_revealed)
-            s.signal_quality = min(raw_sq, tc.signal_quality_cap)  # task caps max quality
+            s.signal_quality = min(raw_sq, tc.signal_quality_cap)
             s.phase          = Phase.MONITORING
             conf             = RE.info_confidence(s.income_revealed, s.credit_history_revealed)
             correct          = p.ground_truth_label == "APPROVE"
@@ -338,17 +369,49 @@ class MicrofinanceEnvironment(Environment):
         s.phase2_intervention_costs += cost
         note = ""
 
-        if atype == "SEND_REMINDER":
+        # Anti-hack v2: MONOTONIC STRATEGY detection
+        # Track consecutive identical Phase 2 actions
+        if atype == s.last_phase2_action:
+            s.consecutive_same_action += 1
+        else:
+            s.consecutive_same_action = 1
+            s.last_phase2_action = atype
+        mono_cost = RE.phase2_monotonic_penalty(s.consecutive_same_action)
+        if mono_cost < 0:
+            s.phase2_intervention_costs += mono_cost
+            note += f" ⚠ Monotonic strategy penalty ({s.consecutive_same_action} same): {mono_cost:+.3f}."
+
+        if atype == "DO_NOTHING":
+            # Anti-hack: INACTION PENALTY when danger signals are visible
+            inaction_cost = RE.phase2_inaction_penalty(s.cumulative_misses, s.missed_streak)
+            if inaction_cost < 0:
+                s.phase2_intervention_costs += inaction_cost
+                note = f"⚠ Inaction during danger. Penalty: {inaction_cost:+.3f}."
+            s.consecutive_reminders = 0  # reset reminder spam counter
+
+        elif atype == "SEND_REMINDER":
             s.current_default_prob = max(0.02, s.current_default_prob * 0.95)
             s.intervention_history.append(f"M{month}:REMINDER")
-            note = f"Reminder sent. Risk → {s.current_default_prob:.2%}."
+            s.consecutive_reminders += 1
+            # Anti-hack: SPAM PENALTY for excessive consecutive reminders
+            spam_cost = RE.phase2_spam_penalty(s.consecutive_reminders)
+            if spam_cost < 0:
+                s.phase2_intervention_costs += spam_cost
+                note = (
+                    f"Reminder sent. Risk → {s.current_default_prob:.2%}. "
+                    f"⚠ Spam penalty ({s.consecutive_reminders} consecutive): {spam_cost:+.3f}."
+                )
+            else:
+                note = f"Reminder sent. Risk → {s.current_default_prob:.2%}."
 
         elif atype == "RESTRUCTURE_LOAN":
             s.current_default_prob = max(0.02, s.current_default_prob * 0.80)
             s.intervention_history.append(f"M{month}:RESTRUCTURE")
+            s.consecutive_reminders = 0
             note = f"Restructured. Risk → {s.current_default_prob:.2%}."
 
         elif atype == "ESCALATE_TO_RECOVERY":
+            s.consecutive_reminders = 0
             reward = RE.phase2_terminal_reward(
                 s.phase1_reward, "ESCALATED", s.phase2_intervention_costs
             )

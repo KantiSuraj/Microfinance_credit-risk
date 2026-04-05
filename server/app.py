@@ -36,10 +36,14 @@ _task_name    = os.environ.get("TASK_NAME", "basic_lending")
 
 # create_fastapi_app expects a callable (factory).
 # We create one instance and always return it so /reset and /step share state.
-_env_instance = MicrofinanceEnvironment(dataset_size=_dataset_size, seed=_seed, task_name=_task_name)
+# _env_instance = MicrofinanceEnvironment(dataset_size=_dataset_size, seed=_seed, task_name=_task_name)
 
 def _env_factory():
-    return _env_instance
+    return MicrofinanceEnvironment(
+        dataset_size=_dataset_size,
+        seed=_seed,
+        task_name=_task_name
+    )
 
 # ── Create the ASGI app ────────────────────────────────────────────────────
 app = create_fastapi_app(_env_factory, CreditAction, ApplicantObservation)

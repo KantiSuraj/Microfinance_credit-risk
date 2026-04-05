@@ -1,18 +1,21 @@
 """
-grader.py — Trajectory-aware evaluation for the two-phase environment.
+grader.py — Trajectory-aware evaluation for the two-phase environment (v2).
 
-Unlike v1, this grader evaluates the FULL TRAJECTORY across both phases:
+Unlike v1, this grader evaluates the FULL TRAJECTORY across both phases
+with anti-reward-hacking hardening:
 
-1. Phase 1 quality    : Was approval/rejection correct? Efficient?
-2. Phase 2 quality    : Were interventions well-timed? Did the agent
-                        adapt to noisy signals appropriately?
-3. Information flow   : Did Phase 1 doc collection improve Phase 2 outcomes?
-4. Compounding effect : Did early interventions outperform late ones?
-                        (measured by comparing default_prob at month 3 vs 6)
+1. Phase 1 quality      (30%): Was approval/rejection correct? Efficient?
+2. Phase 2 quality      (35%): Were interventions well-timed? Adapted to noise?
+3. Timing score         (10%): Did early vs late intervention matter?
+4. Information flow     (10%): Did Phase 1 doc collection improve Phase 2 outcomes?
+5. Information sufficiency (15%) [NEW]: Did agent gather enough evidence before deciding?
 
-The key metric that's impossible for a classifier: TIMING SCORE.
-A correct approval followed by a late intervention on a deteriorating
-borrower scores lower than the same approval with a timely restructure.
+v2 anti-hacking changes:
+  ✓ Info sufficiency dimension — blind decisions heavily penalized
+  ✓ Efficiency U-curve — too FEW steps is also bad (not just too many)
+  ✓ Phase 2 score for rejects capped — can't skip Phase 2 and get full credit
+  ✓ Counterfactual integration — soft penalty for high-confidence wrong decisions
+  ✓ Over-intervention detection — diminishing returns on restructures
 """
 
 from __future__ import annotations
@@ -20,26 +23,31 @@ import json
 from dataclasses import dataclass, field
 from typing import Optional, List
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from counterfactual import counterfactual_grade_modifier
+
 
 @dataclass
 class TrajectoryGrade:
-    score          : float
-    passed         : bool
-    phase1_score   : float
-    phase2_score   : float
-    timing_score   : float
-    info_flow_score: float
-    breakdown      : dict = field(default_factory=dict)
-    llm_feedback   : Optional[str] = None
+    score             : float
+    passed            : bool
+    phase1_score      : float
+    phase2_score      : float
+    timing_score      : float
+    info_flow_score   : float
+    info_sufficiency  : float = 0.5
+    breakdown         : dict = field(default_factory=dict)
+    llm_feedback      : Optional[str] = None
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# PROGRAMMATIC TRAJECTORY GRADER
+# PROGRAMMATIC TRAJECTORY GRADER (v2)
 # ══════════════════════════════════════════════════════════════════════════
 
 def grade_trajectory(episode_log: dict) -> TrajectoryGrade:
     """
-    Full trajectory evaluation.
+    Full trajectory evaluation with anti-reward-hacking hardening.
 
     episode_log expected keys
     ─────────────────────────
@@ -75,8 +83,11 @@ def grade_trajectory(episode_log: dict) -> TrajectoryGrade:
     interventions= episode_log.get("intervention_history", [])
     sq           = episode_log.get("signal_quality", 0.60)
     borderline   = episode_log.get("is_borderline", False)
+    conflicting  = episode_log.get("has_conflicting_signal", False)
 
-    # ── Phase 1 score (35 %) ──────────────────────────────────────────────
+    n_docs = len(docs)
+
+    # ── Phase 1 score (30 %) ──────────────────────────────────────────────
     correct = (p1_decision == ground_truth)
     bd["phase1_correct"] = correct
 
@@ -91,8 +102,25 @@ def grade_trajectory(episode_log: dict) -> TrajectoryGrade:
         ambiguity = 1.0 - abs(default_prob - 0.5) * 2
         p1_correctness = ambiguity * 0.25
 
+    # ── Efficiency U-curve (v2) ───────────────────────────────────────────
+    # Too FEW steps (deciding with no investigation) is also bad.
+    # Ideal: 2-3 steps for clear cases, 4-5 for borderline.
+    # 1 step with 0 docs → low efficiency (rushing)
+    # exact ideal steps → peak efficiency
+    # too many steps → also low (over-investigating)
     ideal_p1_steps = 5 if borderline else 3
-    p1_efficiency = max(0.0, 1.0 - max(0, p1_steps - ideal_p1_steps) / 4)
+    if p1_steps <= 1 and n_docs == 0:
+        # Rushed decision with zero investigation — very low efficiency
+        p1_efficiency = 0.20
+    elif p1_steps <= 1 and n_docs > 0:
+        # Quick but gathered at least some info — moderate
+        p1_efficiency = 0.55
+    else:
+        # Standard efficiency: penalize for going over ideal
+        over = max(0, p1_steps - ideal_p1_steps)
+        under = max(0, ideal_p1_steps - p1_steps - 1)  # -1 so being 1 under is fine
+        p1_efficiency = max(0.0, 1.0 - over / 4 - under / 6)
+
     phase1_score = p1_correctness * 0.7 + p1_efficiency * 0.3
     bd["phase1_correctness"] = round(p1_correctness, 3)
     bd["phase1_efficiency"]  = round(p1_efficiency, 3)
@@ -100,9 +128,12 @@ def grade_trajectory(episode_log: dict) -> TrajectoryGrade:
 
     # ── Phase 2 score (35 %) ──────────────────────────────────────────────
     if not phase2:
-        # Episode ended in Phase 1 — score purely on outcome quality
-        phase2_score = p1_correctness   # consistent with Phase 1 judgement
-        bd["phase2_note"] = "No Phase 2 (rejected or timeout in Phase 1)"
+        # Episode ended in Phase 1 (rejected or timeout)
+        # v2: DON'T give full credit for skipping Phase 2
+        # A reject means the agent avoided the harder challenge entirely.
+        # Cap at 0.5 × p1_correctness — agent didn't prove Phase 2 skill.
+        phase2_score = 0.50 * p1_correctness
+        bd["phase2_note"] = "No Phase 2 (rejected/timeout) — capped at 50% of p1 correctness"
     else:
         if outcome == "REPAID":
             outcome_score = 1.0
@@ -123,8 +154,7 @@ def grade_trajectory(episode_log: dict) -> TrajectoryGrade:
         bd["over_intervene_penalty"]  = round(over_intervene_penalty, 3)
         bd["phase2_score"]            = round(phase2_score, 3)
 
-    # ── Timing score (20 %) ───────────────────────────────────────────────
-    # The key metric a classifier can never optimise.
+    # ── Timing score (10 %) ───────────────────────────────────────────────
     # Did the agent intervene BEFORE the borrower deteriorated badly?
     timing_score = 0.5   # neutral default
 
@@ -149,7 +179,7 @@ def grade_trajectory(episode_log: dict) -> TrajectoryGrade:
         p_m3 = episode_log.get("default_prob_at_month3", default_prob)
         p_m6 = episode_log.get("default_prob_at_month6", default_prob)
         if p_m3 < p_m6:
-            timing_score = max(0.0, timing_score - 0.2)  # interventions too late to bend curve
+            timing_score = max(0.0, timing_score - 0.2)  # interventions too late
     elif phase2 and not interventions:
         # Agent never intervened in Phase 2 — penalise if outcome was default
         timing_score = 0.3 if outcome == "DEFAULT" else 0.7
@@ -158,9 +188,7 @@ def grade_trajectory(episode_log: dict) -> TrajectoryGrade:
 
     # ── Information flow score (10 %) ─────────────────────────────────────
     # Did collecting more info in Phase 1 correlate with better Phase 2 outcome?
-    # Proxy: signal_quality correlates with ability to catch early warning signs
     if sq is None:
-        # Rejected in Phase 1 — no Phase 2 signal to evaluate
         info_flow = 0.7 if docs else 0.5
     elif sq >= 0.90:
         info_flow = 1.0
@@ -176,25 +204,81 @@ def grade_trajectory(episode_log: dict) -> TrajectoryGrade:
     bd["info_flow_score"] = round(info_flow, 3)
     bd["signal_quality"]  = sq
 
-    # ── Composite ─────────────────────────────────────────────────────────
-    composite = (
-        phase1_score  * 0.35
-        + phase2_score  * 0.35
-        + timing_score  * 0.20
-        + info_flow     * 0.10
+    # ── Information sufficiency score (15 %) [NEW in v2] ──────────────────
+    # Penalizes decisions made with inadequate evidence.
+    # A well-informed agent should gather at least 1 doc before deciding.
+    info_suff = _info_sufficiency_score(n_docs, p1_decision, borderline, conflicting)
+    bd["info_sufficiency"] = round(info_suff, 3)
+
+    # ── Counterfactual modifier (soft, baked into composite) ──────────────
+    # Only applied when agent had enough info to make an informed choice.
+    from reward_engine import info_confidence
+    agent_conf = info_confidence(
+        "income_proof" in docs or any("income" in d for d in docs),
+        "credit_history" in docs or any("credit" in d for d in docs),
     )
+    cf_modifier = counterfactual_grade_modifier(
+        p1_decision, agent_conf, ground_truth, default_prob, borderline,
+    )
+    bd["counterfactual_modifier"] = round(cf_modifier, 3)
+
+    # ── Composite (v2 weights) ────────────────────────────────────────────
+    # phase1=30%, phase2=35%, timing=10%, info_flow=10%, info_sufficiency=15%
+    raw_composite = (
+        phase1_score  * 0.30
+        + phase2_score  * 0.35
+        + timing_score  * 0.10
+        + info_flow     * 0.10
+        + info_suff     * 0.15
+    )
+
+    # Apply counterfactual as a SOFT modifier (10% influence)
+    # composite = 90% raw + 10% counterfactual-modified raw
+    composite = raw_composite * 0.90 + raw_composite * cf_modifier * 0.10
+
+    composite = max(0.0, min(1.0, composite))  # clamp
+    bd["raw_composite"] = round(raw_composite, 4)
     bd["composite"] = round(composite, 4)
     bd["terminal_reward"] = t_reward
 
     return TrajectoryGrade(
-        score           = round(composite, 4),
-        passed          = composite >= 0.60,
-        phase1_score    = round(phase1_score, 3),
-        phase2_score    = round(phase2_score, 3),
-        timing_score    = round(timing_score, 3),
-        info_flow_score = round(info_flow, 3),
-        breakdown       = bd,
+        score            = round(composite, 4),
+        passed           = composite >= 0.60,
+        phase1_score     = round(phase1_score, 3),
+        phase2_score     = round(phase2_score, 3),
+        timing_score     = round(timing_score, 3),
+        info_flow_score  = round(info_flow, 3),
+        info_sufficiency = round(info_suff, 3),
+        breakdown        = bd,
     )
+
+
+def _info_sufficiency_score(
+    n_docs: int,
+    decision: str,
+    borderline: bool,
+    conflicting: bool,
+) -> float:
+    """
+    Score for information sufficiency — how well-informed was the decision?
+
+    Returns [0.0, 1.0]:
+      0 docs → 0.15 (blind decision — very low)
+      1 doc, clear case → 0.75 (targeted — good)
+      1 doc, borderline → 0.50 (borderline needs more)
+      2 docs → 0.90 (thorough)
+      3+ docs → 0.55 (over-requesting — significant diminishing returns)
+    """
+    if n_docs == 0:
+        return 0.15   # blind decision
+    elif n_docs == 1:
+        if borderline or conflicting:
+            return 0.50   # borderline/conflicting needs more investigation
+        return 0.75       # clear case, targeted investigation
+    elif n_docs == 2:
+        return 0.90       # thorough
+    else:
+        return 0.55       # v2.1: over-requesting penalized harder
 
 
 def _extract_month(intervention_str: str) -> int:
@@ -288,7 +372,7 @@ def batch_evaluate(episode_logs: List[dict]) -> dict:
 
     Returns a dict with:
       n_episodes, mean_score, median_score, min_score, max_score,
-      pass_rate, mean_phase1, mean_phase2, mean_timing, mean_info_flow
+      pass_rate, mean_phase1, mean_phase2, mean_timing, mean_info_flow, mean_info_suff
     """
     grades = [grade_trajectory(log) for log in episode_logs]
     scores = [g.score for g in grades]
@@ -304,14 +388,15 @@ def batch_evaluate(episode_logs: List[dict]) -> dict:
     )
 
     return {
-        "n_episodes":    n,
-        "mean_score":    round(sum(scores) / n, 4),
-        "median_score":  round(median, 4),
-        "min_score":     round(min(scores), 4),
-        "max_score":     round(max(scores), 4),
-        "pass_rate":     round(sum(1 for g in grades if g.passed) / n, 3),
-        "mean_phase1":   round(sum(g.phase1_score for g in grades) / n, 4),
-        "mean_phase2":   round(sum(g.phase2_score for g in grades) / n, 4),
-        "mean_timing":   round(sum(g.timing_score for g in grades) / n, 4),
+        "n_episodes":     n,
+        "mean_score":     round(sum(scores) / n, 4),
+        "median_score":   round(median, 4),
+        "min_score":      round(min(scores), 4),
+        "max_score":      round(max(scores), 4),
+        "pass_rate":      round(sum(1 for g in grades if g.passed) / n, 3),
+        "mean_phase1":    round(sum(g.phase1_score for g in grades) / n, 4),
+        "mean_phase2":    round(sum(g.phase2_score for g in grades) / n, 4),
+        "mean_timing":    round(sum(g.timing_score for g in grades) / n, 4),
         "mean_info_flow": round(sum(g.info_flow_score for g in grades) / n, 4),
+        "mean_info_suff": round(sum(g.info_sufficiency for g in grades) / n, 4),
     }

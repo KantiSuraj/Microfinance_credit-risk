@@ -139,6 +139,14 @@ class MicrofinanceState(State):
     cumulative_step_penalty    : float  = 0.0
     phase1_reward              : Optional[float] = None
  
+    # ── Anti-hack tracking ────────────────────────────────────────────────
+    redundant_actions          : int    = 0     # count of wasted/redundant actions
+    docs_requested_count       : int    = 0     # total doc+review requests made
+    consecutive_reminders      : int    = 0     # Phase 2 reminder spam counter
+    # v2: Phase 2 action diversity tracking
+    consecutive_same_action    : int    = 0     # streak of identical Phase 2 actions
+    last_phase2_action         : Optional[str] = None  # last Phase 2 action taken
+ 
     # ── Phase 2 state ──────────────────────────────────────────────────────
     # Signal quality: set at Phase 1 → 2 boundary based on docs collected
     signal_quality             : Optional[float] = None

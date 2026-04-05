@@ -29,7 +29,7 @@ tags:
   - two-phase
   - sequential-decision-making
 
-reward_range: [-3.0, 2.5]
+reward_range: [-3.6, 2.5]  # v2.1: wider due to harsher penalties
 max_steps: 19  # 7 Phase 1 + 12 Phase 2
 
 tasks:
