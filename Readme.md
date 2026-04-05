@@ -1,163 +1,297 @@
-# 🏦 Microfinance Credit Decision Environment (OpenEnv)
+# 🏦 Microfinance Credit Decision Environment
 
-An interactive reinforcement learning (RL) environment simulating real-world microfinance loan decisions under uncertainty across a **two-phase loan lifecycle**.
-
-This environment models how loan officers make decisions with incomplete applicant data, and how post-approval monitoring requires strategic interventions to prevent defaults.
+> An RL environment where an agent must decide whether to approve a micro-loan — but it can't see the full picture. It must pay to gather evidence, and every wrong approval costs lives.
 
 ---
 
-## 🚀 Problem Statement
+## ❓ The Problem: Decisions Under Uncertainty
 
-India has millions of microfinance borrowers. Loan officers face two distinct challenges:
-1. **Application Phase**: Working with incomplete data to make risk vs opportunity judgments.
-2. **Monitoring Phase**: Observing noisy repayment signals to identify deteriorating borrowers before they default.
+In India, **80 million+ microfinance borrowers** depend on loan officers making fast decisions with **incomplete, noisy, and conflicting information**.
 
-This environment simulates that process as a **sequential, long-horizon decision-making problem**.
+A real loan officer faces this every day:
 
----
+> *"This applicant earns ₹18,000/month (good) but has 2 past defaults (bad). Do I approve? Or do I spend time and money pulling their credit history first?"*
 
-## 🧠 Key Idea
-
-Unlike traditional ML (predict approve/reject in one step), this environment forces the agent to:
-1. **Plan across two phases** with different action spaces.
-2. **Trade off information gathering cost against future signal quality**: Choosing not to verify credit history saves step costs but yields noisy, unreliable payment observations for the next 12 months.
-3. **Execute time-sensitive interventions**: A late reminder has less impact than an early restructure.
+This is **not** a classification problem.  
+This is a **sequential decision-making** problem under uncertainty.
 
 ---
 
-## ⚙️ Environment Design
+## 🧠 Why Reinforcement Learning?
 
-The episode is divided into two phases.
+A classifier sees all the data and makes one prediction. **That's not how lending works.**
 
-### 🔹 Phase 1: Application
-**Action Space**:
-* `APPROVE` (Moves to Phase 2)
-* `REJECT` (Terminates episode)
-* `REQUEST_INCOME_PROOF` 
-* `REQUEST_CREDIT_HISTORY`
-* `FLAG_FOR_REVIEW`
+| | Traditional ML | This RL Environment |
+|---|---|---|
+| **Input** | Complete feature row | Partial, hidden fields |
+| **Decision** | One-shot predict | Multi-step: gather → analyze → decide |
+| **Cost model** | None | Every action has a cost |
+| **Consequence** | Accuracy metric | Wrong approval → 12 months of default risk |
+| **Time horizon** | Instant | Up to 19 steps across 2 phases |
 
-**Mechanics**:
-* Start with missing/incomplete fields.
-* Document requests reveal hidden fields but incur step penalties.
-* "Signal Quality" for Phase 2 is determined by the documents collected here.
-
----
-
-### 🔹 Phase 2: Monitoring (12 Months)
-**Action Space**:
-* `DO_NOTHING`
-* `SEND_REMINDER`
-* `RESTRUCTURE_LOAN`
-* `ESCALATE_TO_RECOVERY` (Terminates episode)
-
-**Mechanics**:
-* Monthly payment observations are noisy and dependent on Phase 1 "Signal Quality".
-* Interventions modify the borrower's underlying true default probability.
-* Streak accumulations (missed vs on-time payments) dynamically shift the risk band week to week.
-* Terminates upon full repayment (12 months), cumulative default threshold, or manual escalation.
+**The agent must reason sequentially** because:
+1. Information is **hidden** until explicitly requested (and each request costs money)
+2. The quality of Phase 1 investigation **directly determines** how noisy Phase 2 observations will be
+3. A rushed approval means **12 months of monitoring with corrupted signals**
 
 ---
 
-## 🎯 Tasks (3 Difficulty Levels)
+## 🔥 What Makes This Hard?
 
-| Task | Difficulty | What It Tests |
-|------|-----------|---------------|
-| `basic_lending` | Easy | Minimal reasoning. Income pre-revealed, clear signals, 6-month Phase 2. |
-| `noisy_signals` | Medium | Strategic information gathering. Conflicting features, extra penalty for wrong doc requests. |
-| `adversarial_portfolio` | Hard | Long-horizon intervention timing. Borderline approval, elevated risk, capped signal quality (0.75 max), 3-miss default threshold. |
+The agent faces a **three-way trade-off** at every step:
 
----
+```
+                    ┌─────────────────┐
+                    │   INFORMATION   │
+                    │   (cost of      │
+                    │    documents)   │
+                    └────────┬────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              │              │              │
+    ┌─────────▼───────┐      │    ┌─────────▼───────┐
+    │      RISK       │      │    │      DELAY      │
+    │  (default       │◄─────┘───►│  (step          │
+    │   penalty)      │           │   penalties)    │
+    └─────────────────┘           └─────────────────┘
+```
 
-### 🔹 Reward Function (v2.1 — Anti-Hack Hardened)
+- **Gather too little** → approve blindly → borrower defaults → **-2.50 penalty**
+- **Gather too much** → escalating step costs eat your reward → **diminishing returns**
+- **Wait too long to intervene** → default becomes inevitable → **too late to save**
 
-Multi-objective reward with escalating penalties to prevent exploitation.
-
-| Event / Action              | Reward    | Notes |
-| --------------------------- | --------- | ----- |
-| Correct Approve (informed)  | +1.00     | Scales with info confidence |
-| Correct Approve (blind)     | -0.30     | Must gather evidence first |
-| Wrong Approve               | -2.15     | Harsh — bad approval |
-| Correct Reject (informed)   | +0.65     | Well-justified rejection |
-| Correct Reject (blind)      | -0.15     | Discouraged — lazy reject penalty |
-| Wrong Reject                | -1.00     | Missed legitimate borrower |
-| Uninformed decision (conf=0)| -0.10     | Any blind decision penalized |
-| Doc Request                 | -0.10×esc | Escalates with step number |
-| Flag Review                 | -0.15×esc | Escalates with step number |
-| Over-requesting (3rd+ doc)  | -0.12     | Diminishing returns |
-| Redundant action (1st/2nd/3rd)| -0.10/-0.18/-0.26 | Escalating spam penalty |
-| Phase 2: Loan Repaid        | +1.50     | |
-| Phase 2: Loan Default       | -2.50     | |
-| Phase 2: Send Reminder      | -0.05     | Spam penalty at 2+ consecutive |
-| Phase 2: Restructure        | -0.20     | |
-| Phase 2: Escalate           | -0.50     | |
-| Phase 2: Inaction (danger)  | -0.12     | Doubles when streak ≥ 2 |
-| Phase 2: Monotonic strategy | -0.04×esc | 4+ consecutive same action |
+No single strategy wins. The agent must **adapt to each applicant**.
 
 ---
 
-## 🏗️ Architecture
+## 🎬 Demo: Dumb Agent vs. Smart Agent
 
-* **Server**: FastAPI-based OpenEnv environment
-* **Client**: EnvClient wrapper (`client.py`) that handles dynamic two-phase routing of observations transparently.
-* **Environment Logic**: `microfinance_env_environment.py` with Phase 1 and Phase 2 loops.
-* **Dataset**: Synthetic microfinance profile generator mimicking real-world emerging market dynamics.
-* **Grader**: A programmatic and LLM trajectory-aware grader (`grader.py`).
+This is the moment that shows **why RL matters**.
+
+### ❌ Case 1: The Blind Agent (fails)
+
+```
+╔══════════════════════════════════════════════════════════════════╗
+║  EPISODE START — Applicant #A-7291                              ║
+║  Visible: occupation=farmer, dependents=3, loan=₹45,000        ║
+║  Hidden:  monthly_income=???, credit_history=???, defaults=???  ║
+║  Confidence: 0%                                                 ║
+╠══════════════════════════════════════════════════════════════════╣
+║                                                                  ║
+║  Step 1: Agent → APPROVE  (no investigation)                     ║
+║                                                                  ║
+║  ⚠ Ground truth: this borrower has 3 past defaults               ║
+║  ⚠ True default probability: 72%                                 ║
+║  ⚠ Signal quality set to: 60% (worst — no docs collected)        ║
+║                                                                  ║
+║  Phase 1 Reward: -0.40 (blind approval penalty)                  ║
+║                                                                  ║
+║  ── Phase 2: Monitoring (12 months of corrupted signals) ──      ║
+║                                                                  ║
+║  Month 1: Observed ON_TIME  (actually MISSED — signal flipped!)  ║
+║  Month 2: Observed ON_TIME  (actually MISSED — signal flipped!)  ║
+║  Month 3: Observed MISSED   (actually MISSED — finally true)     ║
+║  Month 4: Observed MISSED   (cumulative misses = 4)              ║
+║                                                                  ║
+║  ✖ LOAN DEFAULT — Borrower failed after 4 missed payments        ║
+║                                                                  ║
+║  ╔═══════════════════════════════════════╗                        ║
+║  ║  TOTAL REWARD: -2.50                  ║                        ║
+║  ║  GRADER SCORE: 0.12 / 1.00  ✖ FAIL   ║                        ║
+║  ╚═══════════════════════════════════════╝                        ║
+╚══════════════════════════════════════════════════════════════════╝
+```
+
+**What went wrong:** The agent approved without investigation. Phase 2 signals were 60% noisy — it literally couldn't tell missed payments from on-time ones. By the time real misses showed up, it was too late.
+
+---
+
+### ✅ Case 2: The Strategic Agent (succeeds)
+
+```
+╔══════════════════════════════════════════════════════════════════╗
+║  EPISODE START — Same Applicant #A-7291                         ║
+║  Visible: occupation=farmer, dependents=3, loan=₹45,000        ║
+║  Hidden:  monthly_income=???, credit_history=???, defaults=???  ║
+║  Confidence: 0%                                                 ║
+╠══════════════════════════════════════════════════════════════════╣
+║                                                                  ║
+║  Step 1: Agent → REQUEST_CREDIT_HISTORY                          ║
+║          📋 Revealed: 4 prior loans, 3 defaults, 0-month streak  ║
+║          Confidence: 65%     Cost: -0.12                         ║
+║                                                                  ║
+║  Step 2: Agent → REJECT                                          ║
+║          Rationale: "3 past defaults with 0 repayment streak     ║
+║          indicates extreme risk. Rejection warranted."           ║
+║                                                                  ║
+║  ✓ Ground truth: REJECT — correct decision                       ║
+║                                                                  ║
+║  ╔═══════════════════════════════════════╗                        ║
+║  ║  TOTAL REWARD: +0.53                  ║                        ║
+║  ║  GRADER SCORE: 0.78 / 1.00  ✓ PASS   ║                        ║
+║  ╚═══════════════════════════════════════╝                        ║
+╚══════════════════════════════════════════════════════════════════╝
+```
+
+**What went right:** The agent spent **one step** (cost: -0.12) to reveal the most important signal — credit history. It saw 3 past defaults and immediately rejected. Clean, fast, informed.
+
+> **The difference: +3.03 reward.** One document request changed everything.
+
+---
+
+## 🏗️ Two-Phase Lifecycle
+
+The environment models the **full loan lifecycle**, not just the approval moment.
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    PHASE 1: APPLICATION                  │
+│                    (up to 7 steps)                        │
+│                                                          │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐            │
+│  │ Observe  │───►│ Request  │───►│ Decide   │            │
+│  │ partial  │    │ docs     │    │ approve/ │            │
+│  │ info     │    │ (-cost)  │    │ reject   │            │
+│  └──────────┘    └──────────┘    └─────┬────┘            │
+│                                        │                 │
+│  Actions: APPROVE | REJECT | REQUEST_INCOME_PROOF        │
+│           REQUEST_CREDIT_HISTORY | FLAG_FOR_REVIEW       │
+└────────────────────────────────────────┼─────────────────┘
+                                         │
+                    ┌────────────────────▼──────────────────┐
+                    │   Signal Quality = f(docs collected)   │
+                    │   More docs → clearer Phase 2 signals  │
+                    │   No docs  → noisy, unreliable obs     │
+                    └────────────────────┬──────────────────┘
+                                         │
+┌────────────────────────────────────────▼─────────────────┐
+│                    PHASE 2: MONITORING                    │
+│                    (up to 12 months)                      │
+│                                                           │
+│  Each month:                                              │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐             │
+│  │ Observe  │───►│ Assess   │───►│ Act or   │             │
+│  │ payment  │    │ risk     │    │ wait     │             │
+│  │ (noisy!) │    │ trend    │    │          │             │
+│  └──────────┘    └──────────┘    └──────────┘             │
+│                                                           │
+│  Actions: DO_NOTHING | SEND_REMINDER (-0.05, -5% risk)   │
+│           RESTRUCTURE_LOAN (-0.20, -20% risk)             │
+│           ESCALATE_TO_RECOVERY (-0.50, terminates)        │
+│                                                           │
+│  Ends: loan repaid (+1.50) or default (-2.50) or escalate │
+└───────────────────────────────────────────────────────────┘
+```
+
+### 🔑 The Key Mechanic: Signal Quality Propagation
+
+This is what makes the two phases **causally linked**:
+
+| Docs Collected in Phase 1 | Signal Quality | What It Means |
+|---|---|---|
+| None | 60% | **40% of payment observations are flipped.** Agent is nearly blind. |
+| Income only | 75% | Better, but credit history matters more. |
+| Credit history | 90% | **Agent can trust what it sees.** Interventions are well-timed. |
+
+A rushed Phase 1 doesn't just cost a bad approval — it **corrupts 12 months of future observations**.
+
+---
+
+## 🖥️ Interactive Dashboard
+
+The environment comes with a **live web dashboard** showing:
+
+| Feature | What It Shows |
+|---|---|
+| 📋 Applicant Profile | Partial → revealed info as docs are requested |
+| ⚡ Action History | Every step, cost, and rationale |
+| 📊 Reward Breakdown | Per-step reward, cumulative score, grader dimensions |
+| 📈 Phase 2 Timeline | Monthly payments, interventions, risk evolution |
+| 🎯 Signal Quality | Visual indicator of observation reliability |
+
+> **Visual learning > reading code.** See the agent's behavior step by step.
+
+---
+
+## 🧪 Step-by-Step: How an Episode Works
+
+```
+1. START EPISODE
+   └─ Agent sees: occupation, dependents, loan amount, region
+   └─ Hidden: income, credit history, defaults, streak
+
+2. GATHER INFORMATION (optional, costs money)
+   └─ REQUEST_INCOME_PROOF  → reveals ₹ income + stability
+   └─ REQUEST_CREDIT_HISTORY → reveals loans, defaults, streak
+   └─ FLAG_FOR_REVIEW → senior officer comment (costs more)
+
+3. MAKE DECISION
+   └─ APPROVE → Phase 2 begins (signal quality set by docs)
+   └─ REJECT  → episode ends (must be justified by evidence)
+
+4. MONITOR MONTHLY (if approved)
+   └─ See noisy payment observation each month
+   └─ Choose: wait, remind, restructure, or escalate
+   └─ Risk evolves: misses compound, on-time heals
+
+5. EPISODE ENDS
+   └─ Loan repaid (+1.50) → great outcome
+   └─ Default (-2.50) → catastrophic 
+   └─ Escalated (-0.50) → damage control
+```
+
+---
+
+## 🎯 Three Difficulty Levels
+
+| Task | Difficulty | What Makes It Hard | Agent Skill Tested |
+|---|---|---|---|
+| `basic_lending` | 🟢 Easy | Income pre-revealed, clear signals, 6-month Phase 2 | Basic approve/reject reasoning |
+| `noisy_signals` | 🟡 Medium | Conflicting features, hidden key info, wrong-doc penalties | **Strategic information gathering** |
+| `adversarial_portfolio` | 🔴 Hard | Borderline case, +12% base risk, 75% max signal quality, 3-miss threshold | **Long-horizon intervention timing** |
 
 ---
 
 ## 📦 Project Structure
 
-```text
+```
 microfinance_env/
-│
-├── inference.py              # Baseline LLM inference (runs all 3 tasks)
-├── models.py                 # Action, Phase, Observation, State definitions
-├── client.py                 # Client wrapper handling Two-Phase returns
-├── openenv.yaml              # OpenEnv spec (tasks, metadata)
+├── inference.py                  # Baseline LLM agent (runs all 3 tasks)
+├── models.py                     # Action, Observation, State contracts
+├── client.py                     # Two-phase client wrapper
+├── openenv.yaml                  # OpenEnv specification
 │
 ├── server/
-│   ├── app.py                # FastAPI server (OpenEnv interface)
-│   ├── data_generator.py     # Synthetic dataset generator
-│   ├── grader.py             # 5-dimension trajectory grader (v2)
-│   ├── reward_engine.py      # Anti-hack hardened reward computation
-│   ├── counterfactual.py     # Soft counterfactual oracle (v2)
-│   ├── episode_logger.py     # Episode sampling & pattern detection (v2)
-│   ├── microfinance_env_environment.py # Core environment (Phase 1 & Phase 2)
-│   └── Dockerfile            # Container deployment
+│   ├── app.py                    # FastAPI server (OpenEnv interface)
+│   ├── microfinance_env_environment.py  # Core environment logic
+│   ├── reward_engine.py          # Anti-hack hardened reward system
+│   ├── grader.py                 # 5-dimension trajectory grader
+│   ├── counterfactual.py         # Soft counterfactual oracle
+│   ├── data_generator.py         # Synthetic dataset generator
+│   ├── episode_logger.py         # Pattern detection & logging
+│   └── Dockerfile                # Container deployment
 │
-├── test_env.py               # 22-test adversarial suite (54 checks)
-├── requirements.txt
-├── README.md
-├── ABOUT.md
+├── test_env.py                   # 22 adversarial tests (54 checks)
+└── requirements.txt
 ```
 
-## 🧪 Running Locally
+---
 
-### 1. Activate environment
+## 🚀 Quick Start
+
 ```bash
+# 1. Activate environment
 venv\Scripts\activate
-```
 
-### 2. Start server
-```bash
+# 2. Start server
 uvicorn microfinance_env.server.app:app --reload
+# → http://localhost:8000
+
+# 3. Run baseline agent
+python inference.py
 ```
-Server runs at: `http://localhost:8000`
 
----
-
-## 🔌 API Endpoints
-
-* `POST /reset` → start new episode
-* `POST /step` → take action
-* `GET /state` → inspect internal state
-* `GET /docs` → Swagger UI
-* `WS /ws` → WebSocket (low latency)
-
----
-
-## 💻 Example Usage
+### Example: Programmatic Usage
 
 ```python
 import asyncio
@@ -168,73 +302,76 @@ async def main():
     async with MicrofinanceEnv(base_url="http://localhost:8000") as env:
         obs = await env.reset()
         
-        # Phase 1 — application
-        result = await env.step(CreditAction(action_type="REQUEST_INCOME_PROOF"))
+        # Phase 1 — investigate before deciding
         result = await env.step(CreditAction(action_type="REQUEST_CREDIT_HISTORY"))
-        result = await env.step(CreditAction(action_type="APPROVE", rationale="Looks good"))
+        # Now we can see: past defaults, repayment streak, prior loans
         
-        # Phase 2 — monitoring begins
-        for month in range(12):
-            if result.done:
-                break
+        if result.observation.past_defaults > 2:
+            result = await env.step(CreditAction(
+                action_type="REJECT",
+                rationale="Too many past defaults"
+            ))
+        else:
+            result = await env.step(CreditAction(action_type="APPROVE"))
             
-            # Simple intervention policy
-            action = "SEND_REMINDER" if result.observation.cumulative_misses > 0 else "DO_NOTHING"
-            result = await env.step(CreditAction(action_type=action))
-            print(f"Outcome: {result.observation.last_action_result}, Reward: {result.reward}")
+            # Phase 2 — monitor monthly, intervene when needed
+            for month in range(12):
+                if result.done:
+                    break
+                if result.observation.missed_streak >= 2:
+                    action = "RESTRUCTURE_LOAN"  # aggressive intervention
+                elif result.observation.cumulative_misses > 0:
+                    action = "SEND_REMINDER"      # gentle nudge
+                else:
+                    action = "DO_NOTHING"          # all good
+                result = await env.step(CreditAction(action_type=action))
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
 ```
 
 ---
 
-## 🐳 Docker
+## 🛡️ Anti-Reward-Hacking (9 Strategies)
+
+The environment is hardened against exploitation. No lazy or dumb strategy can consistently score well.
+
+| Strategy | How It Works |
+|---|---|
+| **Multi-Objective Reward** | 5-dimension grader — can't optimize one dimension and ignore others |
+| **Counterfactual Testing** | Penalizes decisions the agent "should have known better" about |
+| **Redundancy Detection** | Escalating penalties for repeated useless actions |
+| **Efficiency U-Curve** | Both rushing (too few steps) AND over-investigating (too many) are penalized |
+| **Diversity Testing** | Verified across 100 seeds — no fixed strategy averages > 0.70 |
+| **Episode Logging** | Automatic pattern detection flags degenerate strategies |
+| **Independent Audit** | 8-flag validator catches exploit patterns |
+| **Behavioral Baselines** | Strict ordering: informed > random > blind > always-reject |
+| **Monotonic Strategy Penalty** | Doing the same Phase 2 action 4+ months straight → escalating cost |
+
+**Test suite: 22 tests, 54 checks — all passing.** ✅
+
+---
+
+## 🐳 Deployment
 
 ```bash
+# Docker
 docker build -t microfinance-env -f server/Dockerfile .
 docker run -p 8000:8000 microfinance-env
-```
 
----
-
-## ☁️ Deploy (OpenEnv)
-
-```bash
+# OpenEnv
 openenv push
 ```
 
 ---
 
-## 🛡️ Anti-Reward-Hacking (v2.1)
-
-The environment implements **9 strategies** to make reward hacking extremely difficult:
-
-| # | Strategy | Mechanism |
-|---|----------|-----------|
-| 1 | Multi-Objective Reward | 5-dimension grader (P1 30%, P2 35%, timing 10%, info flow 10%, info sufficiency 15%) |
-| 2 | Counterfactual Testing | Soft oracle penalizes decisions when agent had enough info to know better |
-| 3 | Redundancy Detection | Escalating penalties for repeated useless actions |
-| 4 | Step Budget | Efficiency U-curve — both rushing and over-investigating are penalized |
-| 5 | Diversity Testing | Verified across 4 seed ranges × 25 seeds each |
-| 6 | Episode Logging | Automatic pattern detection flags degenerate strategies |
-| 7 | Independent Audit | 8-flag secondary validator catches exploit patterns |
-| 8 | Behavioral Baselines | Strict ordering: informed > random > blind > always-reject |
-| 9 | Adversarial Cases | No fixed strategy averages > 0.70 across 50 seeds |
-
-**Test suite**: 22 tests, 54 checks — all passing.
-
----
-
-## 🎯 Why This Matters
-
-This environment moves beyond static classification to highlight:
-* **Two-Phase Lifecycle Planning**: Short-term Phase 1 decisions carry long-term Phase 2 consequences.
-* **Information Quality vs Cost**: Paying for information directly improves future observational reliability.
-* **Time-Sensitive Interventions**: The timing of an action matters as much as the action itself.
-* **Anti-Exploitation by Design**: No lazy or dumb strategy can consistently score well.
-
----
-
 ## 📌 Status
-✅ Version 2.1 — Anti-Reward-Hacking hardened. 54/54 adversarial checks passing.
+
+✅ **Version 2.1** — Anti-Reward-Hacking hardened. 54/54 adversarial checks passing.
+
+---
+
+<p align="center">
+  <b>Built by Suraj Kanti</b><br>
+  <i>"This environment simulates how loan officers make decisions with incomplete information.<br>
+  The agent must decide whether to request more documents or act early — balancing risk and cost."</i>
+</p>
