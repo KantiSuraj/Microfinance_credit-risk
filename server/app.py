@@ -22,6 +22,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))           # serve
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 
 from openenv.core.env_server import create_fastapi_app
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from models import CreditAction, ApplicantObservation
 from microfinance_env_environment import MicrofinanceEnvironment
 
@@ -41,3 +43,12 @@ def _env_factory():
 
 # ── Create the ASGI app ────────────────────────────────────────────────────
 app = create_fastapi_app(_env_factory, CreditAction, ApplicantObservation)
+
+# ── Serve dashboard UI ─────────────────────────────────────────────────────
+_static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+@app.get("/", include_in_schema=False)
+async def root():
+    return FileResponse(os.path.join(_static_dir, "index.html"))
+
+app.mount("/static", StaticFiles(directory=_static_dir), name="static")

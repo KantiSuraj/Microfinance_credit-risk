@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Microfinance Credit Decision Environment</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg-primary: #0a0e1a;
+            --bg-secondary: #111827;
+            --bg-card: rgba(17, 24, 39, 0.7);
+            --bg-glass: rgba(255, 255, 255, 0.03);
+            --border: rgba(255, 255, 255, 0.06);
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-blue: #3b82f6;
+            --accent-cyan: #06b6d4;
+            --accent-green: #10b981;
+            --accent-amber: #f59e0b;
+            --accent-red: #ef4444;
+            --accent-purple: #8b5cf6;
+            --gradient-1: linear-gradient(135deg, #3b82f6, #06b6d4);
+            --gradient-2: linear-gradient(135deg, #8b5cf6, #ec4899);
+            --gradient-3: linear-gradient(135deg, #10b981, #06b6d4);
+            --shadow: 0 0 40px rgba(0, 0, 0, 0.3);
+            --radius: 16px;
+            --radius-sm: 10px;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Background animated gradient */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle at 30% 20%, rgba(59, 130, 246, 0.08) 0%, transparent 50%),
+                        radial-gradient(circle at 70% 80%, rgba(139, 92, 246, 0.06) 0%, transparent 50%),
+                        radial-gradient(circle at 50% 50%, rgba(6, 182, 212, 0.04) 0%, transparent 50%);
+            animation: bgShift 20s ease-in-out infinite;
+            z-index: 0;
+        }
+        @keyframes bgShift {
+            0%, 100% { transform: translate(0, 0); }
+            50% { transform: translate(-3%, -3%); }
+        }
+
+        .app { position: relative; z-index: 1; }
+
+        /* ── Header ── */
+        .header {
+            padding: 20px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: blur(20px);
+            background: rgba(10, 14, 26, 0.8);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .header-left { display: flex; align-items: center; gap: 16px; }
+        .logo {
+            width: 42px; height: 42px;
+            background: var(--gradient-1);
+            border-radius: 12px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 20px;
+            box-shadow: 0 4px 20px rgba(59, 130, 246, 0.3);
+        }
+        .header h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+        .header h1 span { color: var(--accent-cyan); }
+
+        .header-controls { display: flex; align-items: center; gap: 12px; }
+
+        select, button {
+            font-family: 'Inter', sans-serif;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background: var(--bg-card);
+            color: var(--text-primary);
+            padding: 10px 16px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            backdrop-filter: blur(10px);
+        }
+        select {
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+        }
+
+        /* ADD THIS */
+        select option {
+            background: #111827;
+            color: #f1f5f9;
+        }
+        select:hover, button:hover {
+            border-color: var(--accent-blue);
+            background: rgba(59, 130, 246, 0.1);
+        }
+        select:focus, button:focus { outline: none; border-color: var(--accent-blue); }
+
+        .btn-primary {
+            background: var(--gradient-1);
+            border: none;
+            font-weight: 600;
+            padding: 10px 24px;
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+        }
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px rgba(59, 130, 246, 0.4);
+        }
+        .btn-primary:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* ── Layout ── */
+        .main { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; padding: 24px 32px; }
+        @media (max-width: 1200px) { .main { grid-template-columns: 1fr; } }
+
+        /* ── Cards ── */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            backdrop-filter: blur(20px);
+            box-shadow: var(--shadow);
+            transition: all 0.3s ease;
+        }
+        .card:hover { border-color: rgba(255, 255, 255, 0.1); }
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .card-title {
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .card-title .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .dot-blue { background: var(--accent-blue); box-shadow: 0 0 8px var(--accent-blue); }
+        .dot-green { background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }
+        .dot-amber { background: var(--accent-amber); box-shadow: 0 0 8px var(--accent-amber); }
+        .dot-red { background: var(--accent-red); box-shadow: 0 0 8px var(--accent-red); }
+        .dot-purple { background: var(--accent-purple); box-shadow: 0 0 8px var(--accent-purple); }
+
+        .badge {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 20px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .badge-blue { background: rgba(59, 130, 246, 0.15); color: var(--accent-blue); }
+        .badge-green { background: rgba(16, 185, 129, 0.15); color: var(--accent-green); }
+        .badge-amber { background: rgba(245, 158, 11, 0.15); color: var(--accent-amber); }
+        .badge-red { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); }
+        .badge-purple { background: rgba(139, 92, 246, 0.15); color: var(--accent-purple); }
+
+        /* ── Applicant Info Grid ── */
+        .info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .info-item {
+            background: var(--bg-glass);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 14px;
+            transition: all 0.2s ease;
+        }
+        .info-item:hover { background: rgba(255, 255, 255, 0.05); }
+        .info-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+        .info-value {
+            font-size: 15px;
+            font-weight: 600;
+        }
+        .info-value.hidden {
+            color: var(--accent-amber);
+            font-style: italic;
+            font-weight: 400;
+        }
+        .info-value.revealed {
+            color: var(--accent-green);
+        }
+
+        /* ── Action Buttons ── */
+        .actions-panel { margin-top: 20px; }
+        .actions-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        .action-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            padding: 16px 12px;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            text-transform: uppercase;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: var(--bg-glass);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.25s ease;
+        }
+        .action-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            border-color: var(--accent-blue);
+            color: var(--text-primary);
+            background: rgba(59, 130, 246, 0.08);
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.15);
+        }
+        .action-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+        .action-btn .action-icon { font-size: 22px; }
+        .action-btn.approve:hover { border-color: var(--accent-green); background: rgba(16, 185, 129, 0.08); }
+        .action-btn.reject:hover { border-color: var(--accent-red); background: rgba(239, 68, 68, 0.08); }
+        .action-btn.escalate:hover { border-color: var(--accent-red); background: rgba(239, 68, 68, 0.08); }
+
+        /* ── Confidence Meter ── */
+        .meter-container { margin-top: 16px; }
+        .meter-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+        .meter-bar {
+            height: 6px;
+            background: rgba(255, 255, 255, 0.06);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .meter-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.5s ease, background 0.5s ease;
+            background: var(--gradient-1);
+        }
+
+        /* ── Phase 2 Payment History ── */
+        .payment-timeline {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+            margin-top: 12px;
+        }
+        .payment-dot {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+            transition: all 0.3s ease;
+        }
+        .payment-dot.ontime {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent-green);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+        .payment-dot.missed {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--accent-red);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+        .payment-dot.future {
+            background: var(--bg-glass);
+            color: var(--text-muted);
+            border: 1px solid var(--border);
+        }
+
+        /* ── Reward Tracker ── */
+        .reward-display {
+            font-size: 36px;
+            font-weight: 800;
+            letter-spacing: -1px;
+            margin: 8px 0;
+            transition: color 0.3s ease;
+        }
+        .reward-positive { color: var(--accent-green); }
+        .reward-negative { color: var(--accent-red); }
+        .reward-neutral { color: var(--text-secondary); }
+
+        /* ── Log ── */
+        .log-container {
+            grid-column: 1 / -1;
+        }
+        .log-entries {
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', 'Fira Code', monospace;
+            font-size: 12px;
+            line-height: 1.8;
+            color: var(--text-muted);
+            padding: 12px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+        }
+        .log-entries .log-action { color: var(--accent-cyan); }
+        .log-entries .log-reward { color: var(--accent-amber); }
+        .log-entries .log-phase { color: var(--accent-purple); }
+        .log-entries .log-error { color: var(--accent-red); }
+
+        /* ── Stats Row ── */
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            grid-column: 1 / -1;
+        }
+        .stat-card {
+            background: var(--bg-glass);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 18px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 28px;
+            font-weight: 800;
+            letter-spacing: -1px;
+        }
+        .stat-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 4px;
+        }
+
+        /* ── Result Modal ── */
+        .result-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(8px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+        }
+        .result-overlay.visible { display: flex; }
+        .result-modal {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 40px;
+            max-width: 500px;
+            width: 90%;
+            text-align: center;
+            animation: modalIn 0.3s ease;
+        }
+        @keyframes modalIn {
+            from { transform: scale(0.9); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+        .result-modal h2 { font-size: 24px; margin-bottom: 8px; }
+        .result-modal .result-score {
+            font-size: 56px;
+            font-weight: 800;
+            margin: 16px 0;
+        }
+        .result-modal .result-breakdown {
+            text-align: left;
+            margin-top: 20px;
+            font-size: 13px;
+        }
+        .result-modal .result-breakdown div {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* ── Phase indicator ── */
+        .phase-indicator {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 6px;
+        }
+        .phase-step {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+        .phase-step.active { color: var(--accent-cyan); font-weight: 600; }
+        .phase-step .step-dot {
+            width: 24px; height: 24px;
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 11px; font-weight: 700;
+            border: 2px solid var(--border);
+            color: var(--text-muted);
+        }
+        .phase-step.active .step-dot {
+            border-color: var(--accent-cyan);
+            background: rgba(6, 182, 212, 0.15);
+            color: var(--accent-cyan);
+        }
+        .phase-step.done .step-dot {
+            border-color: var(--accent-green);
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent-green);
+        }
+        .phase-connector {
+            flex: 1;
+            height: 2px;
+            background: var(--border);
+        }
+        .phase-connector.done { background: var(--accent-green); }
+
+        /* ── Welcome screen ── */
+        .welcome {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 80px 40px;
+        }
+        .welcome h2 {
+            font-size: 32px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            margin-bottom: 12px;
+            background: var(--gradient-1);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .welcome p { color: var(--text-secondary); max-width: 500px; margin: 0 auto 32px; line-height: 1.7; }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }
+
+        .hidden { display: none !important; }
+
+        /* ── Pulse animation ── */
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .pulsing { animation: pulse 1.5s ease-in-out infinite; }
+    </style>
+</head>
+<body>
+<div class="app">
+    <!-- Header -->
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">🏦</div>
+            <h1>Microfinance <span>RL Environment</span></h1>
+        </div>
+        <div class="header-controls">
+            <select id="taskSelect">
+                <option value="basic_lending">Easy: Basic Lending</option>
+                <option value="noisy_signals">Medium: Noisy Signals</option>
+                <option value="adversarial_portfolio">Hard: Adversarial Portfolio</option>
+            </select>
+            <button class="btn-primary" id="btnReset" onclick="resetEnv()">▶ Start Episode</button>
+        </div>
+    </header>
+
+    <!-- Phase Indicator -->
+    <div style="padding: 16px 32px;" id="phaseBar" class="hidden">
+        <div class="phase-indicator">
+            <div class="phase-step" id="phaseStep1"><div class="step-dot">1</div> Application</div>
+            <div class="phase-connector" id="phaseConn1"></div>
+            <div class="phase-step" id="phaseStep2"><div class="step-dot">2</div> Monitoring</div>
+            <div class="phase-connector" id="phaseConn2"></div>
+            <div class="phase-step" id="phaseStep3"><div class="step-dot">✓</div> Result</div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main">
+        <!-- Welcome Screen -->
+        <div class="welcome" id="welcomeScreen">
+            <h2>Two-Phase Loan Lifecycle</h2>
+            <p>Select a task difficulty and start an episode. Phase 1: evaluate applications with partial information. Phase 2: monitor repayments and intervene to prevent defaults.</p>
+            <div class="stats-row" style="max-width: 700px; margin: 0 auto; grid-column: unset;">
+                <div class="stat-card">
+                    <div class="stat-value" style="color: var(--accent-green);">5</div>
+                    <div class="stat-label">Phase 1 Actions</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color: var(--accent-cyan);">4</div>
+                    <div class="stat-label">Phase 2 Actions</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color: var(--accent-purple);">12</div>
+                    <div class="stat-label">Monitoring Months</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" style="color: var(--accent-amber);">3</div>
+                    <div class="stat-label">Task Difficulties</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Left: Applicant / Environment Panel -->
+        <div class="card" id="envPanel" class="hidden" style="display:none;">
+            <div class="card-header">
+                <div class="card-title"><span class="dot dot-blue"></span> <span id="panelTitle">Applicant Profile</span></div>
+                <span class="badge badge-blue" id="phaseBadge">PHASE 1</span>
+            </div>
+
+            <!-- Phase 1 Info -->
+            <div id="phase1Info">
+                <div class="info-grid">
+                    <div class="info-item"><div class="info-label">Applicant ID</div><div class="info-value" id="vAppId">—</div></div>
+                    <div class="info-item"><div class="info-label">Occupation</div><div class="info-value" id="vOccupation">—</div></div>
+                    <div class="info-item"><div class="info-label">Region</div><div class="info-value" id="vRegion">—</div></div>
+                    <div class="info-item"><div class="info-label">Dependents</div><div class="info-value" id="vDependents">—</div></div>
+                    <div class="info-item"><div class="info-label">Loan Requested</div><div class="info-value" id="vLoan">—</div></div>
+                    <div class="info-item"><div class="info-label">Monthly Income</div><div class="info-value" id="vIncome">—</div></div>
+                    <div class="info-item"><div class="info-label">Income Stability</div><div class="info-value" id="vStability">—</div></div>
+                    <div class="info-item"><div class="info-label">Previous Loans</div><div class="info-value" id="vPrevLoans">—</div></div>
+                    <div class="info-item"><div class="info-label">Past Defaults</div><div class="info-value" id="vDefaults">—</div></div>
+                    <div class="info-item"><div class="info-label">Repayment Streak</div><div class="info-value" id="vStreak">—</div></div>
+                </div>
+                <div class="meter-container">
+                    <div class="meter-label"><span>Info Confidence</span><span id="vConfidence">0%</span></div>
+                    <div class="meter-bar"><div class="meter-fill" id="confidenceFill" style="width:0%"></div></div>
+                </div>
+            </div>
+
+            <!-- Phase 2 Info -->
+            <div id="phase2Info" class="hidden">
+                <div class="info-grid">
+                    <div class="info-item"><div class="info-label">Month</div><div class="info-value" id="vMonth">—</div></div>
+                    <div class="info-item"><div class="info-label">Signal Quality</div><div class="info-value" id="vSignalQ">—</div></div>
+                    <div class="info-item"><div class="info-label">Observed Payment</div><div class="info-value" id="vPayment">—</div></div>
+                    <div class="info-item"><div class="info-label">Cumulative Misses</div><div class="info-value" id="vMisses">—</div></div>
+                    <div class="info-item"><div class="info-label">Missed Streak</div><div class="info-value" id="vMissStreak">—</div></div>
+                    <div class="info-item"><div class="info-label">On-Time Streak</div><div class="info-value" id="vOnStreak">—</div></div>
+                </div>
+                <div class="meter-container" style="margin-top:16px">
+                    <div class="meter-label"><span>Signal Quality</span><span id="vSignalQPct">90%</span></div>
+                    <div class="meter-bar"><div class="meter-fill" id="signalFill" style="width:90%; background: var(--gradient-3)"></div></div>
+                </div>
+                <div style="margin-top:16px">
+                    <div class="info-label">Payment History</div>
+                    <div class="payment-timeline" id="paymentTimeline"></div>
+                </div>
+            </div>
+
+            <!-- Status Message -->
+            <div style="margin-top:16px; padding:12px; background:var(--bg-glass); border-radius:var(--radius-sm); border:1px solid var(--border);">
+                <div class="info-label">Last Action Result</div>
+                <div style="font-size: 13px; color: var(--text-secondary); margin-top: 4px;" id="vMessage">—</div>
+            </div>
+        </div>
+
+        <!-- Right: Actions & Reward Panel -->
+        <div class="card" id="actionPanel" style="display:none;">
+            <div class="card-header">
+                <div class="card-title"><span class="dot dot-green"></span> Actions & Reward</div>
+                <span class="badge badge-green" id="stepBadge">Step 0/7</span>
+            </div>
+
+            <div style="text-align:center; margin-bottom:20px;">
+                <div class="info-label">Cumulative Reward</div>
+                <div class="reward-display reward-neutral" id="rewardDisplay">0.000</div>
+            </div>
+
+            <!-- Phase 1 Actions -->
+            <div id="phase1Actions">
+                <div class="actions-grid">
+                    <button class="action-btn" onclick="doStep('REQUEST_INCOME_PROOF')" id="btnIncome">
+                        <span class="action-icon">📄</span>Request Income Proof
+                    </button>
+                    <button class="action-btn" onclick="doStep('REQUEST_CREDIT_HISTORY')" id="btnCredit">
+                        <span class="action-icon">📊</span>Request Credit History
+                    </button>
+                    <button class="action-btn" onclick="doStep('FLAG_FOR_REVIEW')" id="btnFlag">
+                        <span class="action-icon">🚩</span>Flag for Review
+                    </button>
+                    <button class="action-btn approve" onclick="doStep('APPROVE')" id="btnApprove">
+                        <span class="action-icon">✅</span>Approve Loan
+                    </button>
+                    <button class="action-btn reject" onclick="doStep('REJECT')" id="btnReject" style="grid-column: 1 / -1;">
+                        <span class="action-icon">❌</span>Reject Application
+                    </button>
+                </div>
+            </div>
+
+            <!-- Phase 2 Actions -->
+            <div id="phase2Actions" class="hidden">
+                <div class="actions-grid">
+                    <button class="action-btn" onclick="doStep('DO_NOTHING')" id="btnNothing">
+                        <span class="action-icon">⏳</span>Do Nothing
+                    </button>
+                    <button class="action-btn" onclick="doStep('SEND_REMINDER')" id="btnReminder">
+                        <span class="action-icon">💬</span>Send Reminder
+                    </button>
+                    <button class="action-btn" onclick="doStep('RESTRUCTURE_LOAN')" id="btnRestructure">
+                        <span class="action-icon">🔄</span>Restructure Loan
+                    </button>
+                    <button class="action-btn escalate" onclick="doStep('ESCALATE_TO_RECOVERY')" id="btnEscalate" style="grid-column: 1 / -1;">
+                        <span class="action-icon">🚨</span>Escalate to Recovery
+                    </button>
+                </div>
+            </div>
+
+            <!-- Reward History -->
+            <div style="margin-top:20px;">
+                <div class="info-label">Reward History</div>
+                <div style="display:flex; gap:4px; flex-wrap: wrap; margin-top:8px;" id="rewardBars"></div>
+            </div>
+        </div>
+
+        <!-- Log -->
+        <div class="card log-container" id="logPanel" style="display:none;">
+            <div class="card-header">
+                <div class="card-title"><span class="dot dot-purple"></span> Trajectory Log</div>
+                <span class="badge badge-purple" id="logCount">0 steps</span>
+            </div>
+            <div class="log-entries" id="logEntries"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Result Modal -->
+<div class="result-overlay" id="resultOverlay">
+    <div class="result-modal">
+        <div id="resultIcon" style="font-size: 48px;">🏆</div>
+        <h2 id="resultTitle">Episode Complete</h2>
+        <div id="resultOutcome" class="badge" style="font-size:13px;"></div>
+        <div class="result-score" id="resultScore">0.000</div>
+        <div style="font-size:12px; color: var(--text-muted);">Terminal Reward</div>
+        <div class="result-breakdown" id="resultBreakdown"></div>
+        <button class="btn-primary" style="margin-top:24px; width:100%;" onclick="closeResult()">Start New Episode</button>
+    </div>
+</div>
+
+<script>
+    const API = '';  // same origin
+    let currentPhase = null;
+    let stepCount = 0;
+    let rewards = [];
+    let episodeActive = false;
+
+    async function resetEnv() {
+        try {
+            const res = await fetch(`${API}/reset`, { method: 'POST' });
+            if (!res.ok) throw new Error(`Reset failed: ${res.status}`);
+            const data = await res.json();
+
+            episodeActive = true;
+            stepCount = 0;
+            rewards = [];
+            currentPhase = 'APPLICATION';
+
+            document.getElementById('welcomeScreen').style.display = 'none';
+            document.getElementById('envPanel').style.display = '';
+            document.getElementById('actionPanel').style.display = '';
+            document.getElementById('logPanel').style.display = '';
+            document.getElementById('phaseBar').classList.remove('hidden');
+            document.getElementById('logEntries').innerHTML = '';
+            document.getElementById('rewardBars').innerHTML = '';
+            document.getElementById('resultOverlay').classList.remove('visible');
+
+            updatePhaseIndicator('APPLICATION');
+            updateObservation(data);
+            addLog('RESET', 'Episode started', 0);
+        } catch (e) {
+            alert('Error: ' + e.message + '\n\nMake sure the server is running on port 8000.');
+        }
+    }
+
+    async function doStep(actionType) {
+        if (!episodeActive) return;
+
+        const allBtns = document.querySelectorAll('.action-btn');
+        allBtns.forEach(b => b.disabled = true);
+
+        try {
+            const res = await fetch(`${API}/step`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: { action_type: actionType, rationale: 'interactive' } })
+            });
+            if (!res.ok) {
+                const err = await res.text();
+                throw new Error(`Step failed: ${err}`);
+            }
+            const data = await res.json();
+            stepCount++;
+            const reward = data.reward || 0;
+            rewards.push(reward);
+
+            updateObservation(data);
+            addLog(actionType, data.observation?.last_action_result || '', reward);
+            addRewardBar(reward);
+
+            if (data.done) {
+                episodeActive = false;
+                showResult(data);
+            }
+        } catch (e) {
+            addLog('ERROR', e.message, 0);
+        } finally {
+            if (episodeActive) {
+                const btns = document.querySelectorAll(
+                    currentPhase === 'MONITORING' ? '#phase2Actions .action-btn' : '#phase1Actions .action-btn'
+                );
+                btns.forEach(b => b.disabled = false);
+            }
+        }
+    }
+
+    function updateObservation(data) {
+        const obs = data.observation || {};
+        const phase = obs.current_phase || 'APPLICATION';
+        currentPhase = phase;
+
+        // Update reward
+        const totalReward = data.reward || 0;
+        const rd = document.getElementById('rewardDisplay');
+        rd.textContent = totalReward >= 0 ? `+${totalReward.toFixed(3)}` : totalReward.toFixed(3);
+        rd.className = 'reward-display ' + (totalReward > 0 ? 'reward-positive' : totalReward < 0 ? 'reward-negative' : 'reward-neutral');
+
+        if (phase === 'APPLICATION' || phase === 'TERMINAL') {
+            // Phase 1
+            document.getElementById('phase1Info').classList.remove('hidden');
+            document.getElementById('phase2Info').classList.add('hidden');
+            document.getElementById('phase1Actions').classList.remove('hidden');
+            document.getElementById('phase2Actions').classList.add('hidden');
+            document.getElementById('phaseBadge').textContent = 'PHASE 1';
+            document.getElementById('phaseBadge').className = 'badge badge-blue';
+            document.getElementById('panelTitle').textContent = 'Applicant Profile';
+
+            document.getElementById('vAppId').textContent = obs.applicant_id || '—';
+            document.getElementById('vOccupation').textContent = (obs.occupation || '—').replace(/_/g, ' ');
+            document.getElementById('vRegion').textContent = (obs.region_tier || '—').replace(/_/g, ' ');
+            document.getElementById('vDependents').textContent = obs.dependents ?? '—';
+            document.getElementById('vLoan').textContent = obs.loan_amount_requested ? `₹${obs.loan_amount_requested.toLocaleString('en-IN')}` : '—';
+
+            const income = document.getElementById('vIncome');
+            if (obs.monthly_income != null) {
+                income.textContent = `₹${obs.monthly_income.toLocaleString('en-IN')}`;
+                income.className = 'info-value revealed';
+            } else {
+                income.textContent = '🔒 HIDDEN';
+                income.className = 'info-value hidden';
+            }
+            const stability = document.getElementById('vStability');
+            stability.textContent = obs.income_source_stability || '🔒 HIDDEN';
+            stability.className = obs.income_source_stability ? 'info-value revealed' : 'info-value hidden';
+
+            const prev = document.getElementById('vPrevLoans');
+            prev.textContent = obs.previous_loans != null ? obs.previous_loans : '🔒 HIDDEN';
+            prev.className = obs.previous_loans != null ? 'info-value revealed' : 'info-value hidden';
+
+            const defs = document.getElementById('vDefaults');
+            defs.textContent = obs.past_defaults != null ? obs.past_defaults : '🔒 HIDDEN';
+            defs.className = obs.past_defaults != null ? 'info-value revealed' : 'info-value hidden';
+
+            const streak = document.getElementById('vStreak');
+            streak.textContent = obs.repayment_streak != null ? `${obs.repayment_streak} months` : '🔒 HIDDEN';
+            streak.className = obs.repayment_streak != null ? 'info-value revealed' : 'info-value hidden';
+
+            const conf = (obs.info_confidence || 0) * 100;
+            document.getElementById('vConfidence').textContent = `${conf.toFixed(0)}%`;
+            document.getElementById('confidenceFill').style.width = `${conf}%`;
+
+            document.getElementById('stepBadge').textContent = `Step ${obs.step_count || 0}/${obs.max_steps || 7}`;
+        }
+
+        if (phase === 'MONITORING') {
+            // Phase 2
+            document.getElementById('phase1Info').classList.add('hidden');
+            document.getElementById('phase2Info').classList.remove('hidden');
+            document.getElementById('phase1Actions').classList.add('hidden');
+            document.getElementById('phase2Actions').classList.remove('hidden');
+            document.getElementById('phaseBadge').textContent = 'PHASE 2';
+            document.getElementById('phaseBadge').className = 'badge badge-amber';
+            document.getElementById('panelTitle').textContent = 'Loan Monitoring';
+
+            const totalM = obs.month_number + obs.months_remaining;
+            document.getElementById('vMonth').textContent = `${obs.month_number} / ${totalM}`;
+            document.getElementById('vSignalQ').textContent = `${(obs.signal_quality * 100).toFixed(0)}%`;
+            document.getElementById('vSignalQPct').textContent = `${(obs.signal_quality * 100).toFixed(0)}%`;
+            document.getElementById('signalFill').style.width = `${obs.signal_quality * 100}%`;
+
+            const payment = document.getElementById('vPayment');
+            payment.textContent = obs.observed_payment;
+            payment.className = 'info-value ' + (obs.observed_payment === 'ON_TIME' ? 'revealed' : '');
+            if (obs.observed_payment === 'MISSED') payment.style.color = 'var(--accent-red)';
+            else payment.style.color = '';
+
+            document.getElementById('vMisses').textContent = obs.cumulative_misses;
+            document.getElementById('vMissStreak').textContent = obs.missed_streak;
+            document.getElementById('vOnStreak').textContent = obs.ontime_streak;
+
+            // Payment timeline
+            const timeline = document.getElementById('paymentTimeline');
+            timeline.innerHTML = '';
+            const history = obs.payment_history || [];
+            for (let i = 0; i < totalM; i++) {
+                const dot = document.createElement('div');
+                dot.className = 'payment-dot ';
+                if (i < history.length) {
+                    dot.className += history[i] === 'ON_TIME' ? 'ontime' : 'missed';
+                    dot.textContent = history[i] === 'ON_TIME' ? '✓' : '✗';
+                } else {
+                    dot.className += 'future';
+                    dot.textContent = i + 1;
+                }
+                timeline.appendChild(dot);
+            }
+
+            document.getElementById('stepBadge').textContent = `Month ${obs.month_number}/${totalM}`;
+            updatePhaseIndicator('MONITORING');
+        }
+
+        document.getElementById('vMessage').textContent = obs.last_action_result || '—';
+    }
+
+    function updatePhaseIndicator(phase) {
+        const s1 = document.getElementById('phaseStep1');
+        const s2 = document.getElementById('phaseStep2');
+        const s3 = document.getElementById('phaseStep3');
+        const c1 = document.getElementById('phaseConn1');
+        const c2 = document.getElementById('phaseConn2');
+
+        s1.className = 'phase-step'; s2.className = 'phase-step'; s3.className = 'phase-step';
+        c1.className = 'phase-connector'; c2.className = 'phase-connector';
+
+        if (phase === 'APPLICATION') {
+            s1.classList.add('active');
+        } else if (phase === 'MONITORING') {
+            s1.classList.add('done'); c1.classList.add('done'); s2.classList.add('active');
+        } else {
+            s1.classList.add('done'); c1.classList.add('done'); s2.classList.add('done');
+            c2.classList.add('done'); s3.classList.add('active');
+        }
+    }
+
+    function addLog(action, message, reward) {
+        const el = document.getElementById('logEntries');
+        const time = new Date().toLocaleTimeString();
+        const rClass = reward >= 0 ? 'log-reward' : 'log-error';
+        el.innerHTML += `<div>[${time}] <span class="log-action">${action}</span> → ${message} <span class="${rClass}">(${reward >= 0 ? '+' : ''}${reward.toFixed(3)})</span></div>`;
+        el.scrollTop = el.scrollHeight;
+        document.getElementById('logCount').textContent = `${stepCount} steps`;
+    }
+
+    function addRewardBar(reward) {
+        const container = document.getElementById('rewardBars');
+        const bar = document.createElement('div');
+        const h = Math.min(Math.abs(reward) * 20 + 4, 40);
+        bar.style.cssText = `width:8px; height:${h}px; border-radius:3px; background:${reward >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'}; opacity:0.7; transition: all 0.3s;`;
+        bar.title = `Step ${stepCount}: ${reward.toFixed(3)}`;
+        container.appendChild(bar);
+    }
+
+    function showResult(data) {
+        const reward = data.reward || 0;
+        const obs = data.observation || {};
+        const outcome = obs.last_action_result || 'Episode ended';
+
+        updatePhaseIndicator('TERMINAL');
+
+        const overlay = document.getElementById('resultOverlay');
+        const icon = document.getElementById('resultIcon');
+        const title = document.getElementById('resultTitle');
+        const outBadge = document.getElementById('resultOutcome');
+        const score = document.getElementById('resultScore');
+
+        if (outcome.includes('repaid') || outcome.includes('Repaid')) {
+            icon.textContent = '🏆'; title.textContent = 'Loan Fully Repaid!';
+            outBadge.textContent = 'REPAID'; outBadge.className = 'badge badge-green';
+            score.style.color = 'var(--accent-green)';
+        } else if (outcome.includes('DEFAULT')) {
+            icon.textContent = '💔'; title.textContent = 'Loan Defaulted';
+            outBadge.textContent = 'DEFAULT'; outBadge.className = 'badge badge-red';
+            score.style.color = 'var(--accent-red)';
+        } else if (outcome.includes('REJECTED') || outcome.includes('Incorrect') || outcome.includes('Correct')) {
+            icon.textContent = outcome.includes('Correct') ? '✅' : '⚠️';
+            title.textContent = outcome.includes('Correct') ? 'Correct Decision' : 'Incorrect Decision';
+            outBadge.textContent = 'REJECTED'; outBadge.className = 'badge badge-amber';
+            score.style.color = reward >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+        } else if (outcome.includes('Escalat')) {
+            icon.textContent = '🚨'; title.textContent = 'Escalated to Recovery';
+            outBadge.textContent = 'ESCALATED'; outBadge.className = 'badge badge-amber';
+            score.style.color = 'var(--accent-amber)';
+        } else {
+            icon.textContent = '📋'; title.textContent = 'Episode Complete';
+            outBadge.textContent = 'DONE'; outBadge.className = 'badge badge-blue';
+            score.style.color = 'var(--text-primary)';
+        }
+
+        score.textContent = (reward >= 0 ? '+' : '') + reward.toFixed(3);
+
+        const bd = document.getElementById('resultBreakdown');
+        bd.innerHTML = `
+            <div><span>Total Steps</span><span>${stepCount}</span></div>
+            <div><span>Final Reward</span><span style="color:${reward >= 0 ? 'var(--accent-green)' : 'var(--accent-red)'}">${reward.toFixed(3)}</span></div>
+            <div><span>Reward History</span><span>${rewards.map(r => r.toFixed(2)).join(', ')}</span></div>
+        `;
+
+        overlay.classList.add('visible');
+    }
+
+    function closeResult() {
+        document.getElementById('resultOverlay').classList.remove('visible');
+        resetEnv();
+    }
+</script>
+</body>
+</html>
