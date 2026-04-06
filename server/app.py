@@ -58,8 +58,7 @@ async def root():
 app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
 
-# ── Entry point for OpenEnv runner ─────────────────────────────────────────
-
+# ── Entry point for OpenEnv runner ─────────────────────────────────
 def main():
     import uvicorn
     uvicorn.run(
