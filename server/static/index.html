@@ -39,7 +39,6 @@
             overflow-x: hidden;
         }
 
-        /* Background animated gradient */
         body::before {
             content: '';
             position: fixed;
@@ -60,7 +59,6 @@
 
         .app { position: relative; z-index: 1; }
 
-        /* ── Header ── */
         .header {
             padding: 20px 32px;
             display: flex;
@@ -104,8 +102,6 @@
             -webkit-appearance: none;
             -moz-appearance: none;
         }
-
-        /* ADD THIS */
         select option {
             background: #111827;
             color: #f1f5f9;
@@ -133,11 +129,9 @@
             transform: none;
         }
 
-        /* ── Layout ── */
         .main { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; padding: 24px 32px; }
         @media (max-width: 1200px) { .main { grid-template-columns: 1fr; } }
 
-        /* ── Cards ── */
         .card {
             background: var(--bg-card);
             border: 1px solid var(--border);
@@ -190,7 +184,6 @@
         .badge-red { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); }
         .badge-purple { background: rgba(139, 92, 246, 0.15); color: var(--accent-purple); }
 
-        /* ── Applicant Info Grid ── */
         .info-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -224,7 +217,6 @@
             color: var(--accent-green);
         }
 
-        /* ── Action Buttons ── */
         .actions-panel { margin-top: 20px; }
         .actions-grid {
             display: grid;
@@ -261,7 +253,6 @@
         .action-btn.reject:hover { border-color: var(--accent-red); background: rgba(239, 68, 68, 0.08); }
         .action-btn.escalate:hover { border-color: var(--accent-red); background: rgba(239, 68, 68, 0.08); }
 
-        /* ── Confidence Meter ── */
         .meter-container { margin-top: 16px; }
         .meter-label {
             display: flex;
@@ -283,7 +274,6 @@
             background: var(--gradient-1);
         }
 
-        /* ── Phase 2 Payment History ── */
         .payment-timeline {
             display: flex;
             gap: 4px;
@@ -317,7 +307,6 @@
             border: 1px solid var(--border);
         }
 
-        /* ── Reward Tracker ── */
         .reward-display {
             font-size: 36px;
             font-weight: 800;
@@ -329,7 +318,6 @@
         .reward-negative { color: var(--accent-red); }
         .reward-neutral { color: var(--text-secondary); }
 
-        /* ── Log ── */
         .log-container {
             grid-column: 1 / -1;
         }
@@ -350,7 +338,6 @@
         .log-entries .log-phase { color: var(--accent-purple); }
         .log-entries .log-error { color: var(--accent-red); }
 
-        /* ── Stats Row ── */
         .stats-row {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -377,7 +364,6 @@
             margin-top: 4px;
         }
 
-        /* ── Result Modal ── */
         .result-overlay {
             position: fixed;
             inset: 0;
@@ -421,7 +407,6 @@
             border-bottom: 1px solid var(--border);
         }
 
-        /* ── Phase indicator ── */
         .phase-indicator {
             display: flex;
             align-items: center;
@@ -461,7 +446,6 @@
         }
         .phase-connector.done { background: var(--accent-green); }
 
-        /* ── Welcome screen ── */
         .welcome {
             grid-column: 1 / -1;
             text-align: center;
@@ -479,18 +463,15 @@
         }
         .welcome p { color: var(--text-secondary); max-width: 500px; margin: 0 auto 32px; line-height: 1.7; }
 
-        /* Scrollbar */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }
 
         .hidden { display: none !important; }
 
-        /* ── Pulse animation ── */
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
         .pulsing { animation: pulse 1.5s ease-in-out infinite; }
 
-        /* ── Collected doc button state (Bug 2) ── */
         .action-btn.collected {
             border: 1px solid #22c55e;
             opacity: 0.75;
@@ -505,7 +486,6 @@
             font-size: 11px;
         }
 
-        /* ── Phase transition banner (Bug 3) ── */
         .phase-status-banner {
             padding: 10px 16px;
             background: rgba(139, 92, 246, 0.12);
@@ -519,7 +499,6 @@
             animation: pulse 1.5s ease-in-out infinite;
         }
 
-        /* ── Phase goal header ── */
         .phase-goal {
             padding: 10px 14px;
             background: rgba(6, 182, 212, 0.08);
@@ -534,7 +513,6 @@
             gap: 8px;
         }
 
-        /* ── Transition panel (APPROVE → Phase 2) ── */
         .transition-panel {
             text-align: center;
             padding: 32px 24px;
@@ -582,7 +560,6 @@
 </head>
 <body>
 <div class="app">
-    <!-- Header -->
     <header class="header">
         <div class="header-left">
             <div class="logo">🏦</div>
@@ -598,7 +575,6 @@
         </div>
     </header>
 
-    <!-- Phase Indicator -->
     <div style="padding: 16px 32px;" id="phaseBar" class="hidden">
         <div class="phase-indicator">
             <div class="phase-step" id="phaseStep1"><div class="step-dot">1</div> Application</div>
@@ -609,9 +585,7 @@
         </div>
     </div>
 
-    <!-- Main Content -->
     <div class="main">
-        <!-- Welcome Screen -->
         <div class="welcome" id="welcomeScreen">
             <h2>Two-Phase Loan Lifecycle</h2>
             <p>Select a task difficulty and start an episode. Phase 1: evaluate applications with partial information. Phase 2: monitor repayments and intervene to prevent defaults.</p>
@@ -635,20 +609,17 @@
             </div>
         </div>
 
-        <!-- Left: Applicant / Environment Panel -->
         <div class="card" id="envPanel" class="hidden" style="display:none;">
             <div class="card-header">
                 <div class="card-title"><span class="dot dot-blue"></span> <span id="panelTitle">Applicant Profile</span></div>
                 <span class="badge badge-blue" id="phaseBadge">PHASE 1</span>
             </div>
 
-            <!-- Phase Goal Header -->
             <div class="phase-goal" id="phaseGoal">
                 <span>🎯</span>
                 <span id="phaseGoalText">Gather evidence before making a lending decision</span>
             </div>
 
-            <!-- Phase 1 Info -->
             <div id="phase1Info">
                 <div class="info-grid">
                     <div class="info-item"><div class="info-label">Applicant ID</div><div class="info-value" id="vAppId">—</div></div>
@@ -668,7 +639,6 @@
                 </div>
             </div>
 
-            <!-- Phase 2 Info -->
             <div id="phase2Info" class="hidden">
                 <div class="info-grid">
                     <div class="info-item"><div class="info-label">Month</div><div class="info-value" id="vMonth">—</div></div>
@@ -688,14 +658,12 @@
                 </div>
             </div>
 
-            <!-- Status Message -->
             <div style="margin-top:16px; padding:12px; background:var(--bg-glass); border-radius:var(--radius-sm); border:1px solid var(--border);">
                 <div class="info-label">Last Action Result</div>
                 <div style="font-size: 13px; color: var(--text-secondary); margin-top: 4px;" id="vMessage">—</div>
             </div>
         </div>
 
-        <!-- Right: Actions & Reward Panel -->
         <div class="card" id="actionPanel" style="display:none;">
             <div class="card-header">
                 <div class="card-title"><span class="dot dot-green"></span> Actions & Reward</div>
@@ -707,7 +675,6 @@
                 <div class="reward-display reward-neutral" id="rewardDisplay">0.000</div>
             </div>
 
-            <!-- Phase 1 Actions -->
             <div id="phase1Actions">
                 <div class="actions-grid">
                     <button class="action-btn" onclick="doStep('REQUEST_INCOME_PROOF')" id="btnIncome">
@@ -728,7 +695,6 @@
                 </div>
             </div>
 
-            <!-- Phase 2 Actions -->
             <div id="phase2Actions" class="hidden">
                 <div class="actions-grid">
                     <button class="action-btn" onclick="doStep('DO_NOTHING')" id="btnNothing">
@@ -746,7 +712,6 @@
                 </div>
             </div>
 
-            <!-- Transition Panel (APPROVE → Phase 2) -->
             <div id="transitionPanel" class="hidden">
                 <div class="transition-panel">
                     <div style="font-size: 48px; margin-bottom: 12px;">✅</div>
@@ -757,14 +722,12 @@
                 </div>
             </div>
 
-            <!-- Reward History -->
             <div style="margin-top:20px;">
                 <div class="info-label">Reward History</div>
                 <div style="display:flex; gap:4px; flex-wrap: wrap; margin-top:8px;" id="rewardBars"></div>
             </div>
         </div>
 
-        <!-- Log -->
         <div class="card log-container" id="logPanel" style="display:none;">
             <div class="card-header">
                 <div class="card-title"><span class="dot dot-purple"></span> Trajectory Log</div>
@@ -775,7 +738,6 @@
     </div>
 </div>
 
-<!-- Result Modal -->
 <div class="result-overlay" id="resultOverlay">
     <div class="result-modal">
         <div id="resultIcon" style="font-size: 48px;">🏆</div>
@@ -789,7 +751,7 @@
 </div>
 
 <script>
-    const API = window.location.origin; // same origin
+    const API = window.location.origin;
     let currentPhase = null;
     let stepCount = 0;
     let rewards = [];
@@ -866,7 +828,6 @@
     }
 
     function enableButtonsForPhase(phase) {
-        // Remove collected markers on all buttons (re-applied below from backend truth)
         document.querySelectorAll('.action-btn').forEach(b => b.classList.remove('collected'));
 
         if (phase === 'APPLICATION' || phase == null) {
@@ -881,33 +842,39 @@
     function updateObservation(data) {
         const obs = data.observation || {};
         const phase = obs.current_phase || 'APPLICATION';
-        const isTransitioning = obs.transitioning_to_phase2 === true;
+
+        // ── BUGFIX ────────────────────────────────────────────────────────────
+        // The backend sometimes omits `transitioning_to_phase2` (or returns it
+        // as false) even though `last_action_result` already says
+        // "Phase 2 starts next step".  Deriving the flag from either source
+        // prevents the dead-state where phase=APPLICATION, no transition panel,
+        // and all buttons are disabled.
+        const _lastMsg = (obs.last_action_result || '').toLowerCase();
+        const isTransitioning = obs.transitioning_to_phase2 === true
+            || (phase === 'APPLICATION' && _lastMsg.includes('phase 2'));
+        // ─────────────────────────────────────────────────────────────────────
+
         currentPhase = phase;
         transitioning = isTransitioning;
 
-        // Bug 1: Phase-aware button enable on every observation update
         enableButtonsForPhase(phase);
 
-        // Handle transition state: show transition panel, hide action buttons
         if (isTransitioning) {
             document.getElementById('phase1Actions').classList.add('hidden');
             document.getElementById('phase2Actions').classList.add('hidden');
             document.getElementById('transitionPanel').classList.remove('hidden');
-            // Show signal quality info in transition panel
             const msg = obs.last_action_result || '';
             document.getElementById('transitionDetail').textContent = msg;
         } else {
             document.getElementById('transitionPanel').classList.add('hidden');
         }
 
-        // Update reward
         const totalReward = data.reward || 0;
         const rd = document.getElementById('rewardDisplay');
         rd.textContent = totalReward >= 0 ? `+${totalReward.toFixed(3)}` : totalReward.toFixed(3);
         rd.className = 'reward-display ' + (totalReward > 0 ? 'reward-positive' : totalReward < 0 ? 'reward-negative' : 'reward-neutral');
 
         if (phase === 'APPLICATION' || phase === 'TERMINAL') {
-            // Phase 1
             document.getElementById('phase1Info').classList.remove('hidden');
             document.getElementById('phase2Info').classList.add('hidden');
             if (!isTransitioning) {
@@ -918,7 +885,6 @@
             document.getElementById('phaseBadge').className = 'badge badge-blue';
             document.getElementById('panelTitle').textContent = 'Applicant Profile';
 
-            // Phase goal
             document.getElementById('phaseGoalText').textContent = isTransitioning
                 ? 'Loan approved! Click "Start Monitoring" to begin Phase 2'
                 : 'Gather evidence before making a lending decision';
@@ -961,7 +927,6 @@
         }
 
         if (phase === 'MONITORING') {
-            // Phase 2
             document.getElementById('phase1Info').classList.add('hidden');
             document.getElementById('phase2Info').classList.remove('hidden');
             document.getElementById('phase1Actions').classList.add('hidden');
@@ -969,11 +934,9 @@
             document.getElementById('phaseBadge').textContent = 'PHASE 2';
             document.getElementById('phaseBadge').className = 'badge badge-amber';
             document.getElementById('panelTitle').textContent = 'Loan Monitoring';
-            // Phase goal for monitoring
             document.getElementById('phaseGoalText').textContent =
                 'Monitor repayments and intervene to prevent defaults';
 
-            // Bug 3: Defensive null guards — missing ≠ zero
             const sq = obs.signal_quality;
             const monthNum = obs.month_number;
             const monthsRem = obs.months_remaining;
@@ -998,7 +961,6 @@
             document.getElementById('vMissStreak').textContent = obs.missed_streak ?? '—';
             document.getElementById('vOnStreak').textContent = obs.ontime_streak ?? '—';
 
-            // Payment timeline
             const timeline = document.getElementById('paymentTimeline');
             timeline.innerHTML = '';
             const history = obs.payment_history || [];
@@ -1020,7 +982,6 @@
             updatePhaseIndicator('MONITORING');
         }
 
-        // Bug 2: Derive collected-doc state from backend, never track client-side
         const docs = obs.documents_submitted || [];
         document.getElementById('btnIncome').classList.toggle('collected', docs.includes('income_proof'));
         document.getElementById('btnCredit').classList.toggle('collected', docs.includes('credit_history'));
