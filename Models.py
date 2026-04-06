@@ -107,6 +107,9 @@ class MonitoringObservation(Observation):
     ontime_streak       : int         = 0
     payment_history     : List[str]   = Field(default_factory=list)
     intervention_history: List[str]   = Field(default_factory=list)
+    # Noisy precursor signal [0,1]. Values above 0.5 suggest elevated
+    # external shock probability next month. Zero when no shock is scheduled.
+    economic_stress_signal: float     = 0.0
     current_phase       : str         = "MONITORING"
     last_action_result  : str         = ""
  
@@ -161,6 +164,11 @@ class MicrofinanceState(State):
     ontime_streak              : int    = 0
     cumulative_misses          : int    = 0
     phase2_intervention_costs  : float  = 0.0
+
+    # ── External shock scheduling (1-month lagged signal) ─────────────────
+    shock_scheduled            : bool   = False
+    shock_magnitude            : float  = 0.0
+    shock_signal_strength      : float  = 0.0
  
     # ── Terminal ───────────────────────────────────────────────────────────
     terminal_reward            : Optional[float] = None

@@ -56,3 +56,19 @@ async def root():
     return FileResponse(os.path.join(_static_dir, "index.html"))
 
 app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
+
+# ── Entry point for OpenEnv runner ─────────────────────────────────────────
+
+def main():
+    import uvicorn
+    uvicorn.run(
+        "server.app:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=False,
+    )
+
+
+if __name__ == "__main__":
+    main()
