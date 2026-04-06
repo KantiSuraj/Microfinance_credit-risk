@@ -341,7 +341,20 @@ class MicrofinanceEnvironment(Environment):
 
     def _dispatch_phase2(self, action: CreditAction) -> MonitoringObservation:
         s, p  = self._state, self._profile
+
+        VALID_PHASE2_ACTIONS = {
+            "DO_NOTHING", "SEND_REMINDER",
+            "RESTRUCTURE_LOAN", "ESCALATE_TO_RECOVERY",
+        }
         atype = action.action_type
+
+        if atype not in VALID_PHASE2_ACTIONS:
+            # Silently treat unknown/wrong-phase action as DO_NOTHING
+            atype = "DO_NOTHING"
+            action = CreditAction(
+                action_type="DO_NOTHING",
+                rationale=f"[Invalid Phase 2 action '{action.action_type}' → DO_NOTHING]",
+            )
 
         s.months_completed += 1
         month = s.months_completed
@@ -370,6 +383,27 @@ class MicrofinanceEnvironment(Environment):
         cost = RE.phase2_intervention_cost(atype)
         s.phase2_intervention_costs += cost
         note = ""
+
+        # ── External shock scheduling (1-month lagged signal) ─────────────
+        # Month N: 5% chance → schedule shock, set signal strength
+        # Month N+1: apply the shock that was signaled last month
+        if s.shock_scheduled:
+            # Apply the shock that was signaled last month
+            s.financial_stability = s.current_default_prob  # save for note
+            s.current_default_prob = min(
+                0.98, s.current_default_prob + s.shock_magnitude
+            )
+            note += (f" ⚠ External shock hit! Risk +{s.shock_magnitude:.0%}"
+                     f" → {s.current_default_prob:.2%}.")
+            s.shock_scheduled = False
+            s.shock_magnitude = 0.0
+            s.shock_signal_strength = 0.0
+
+        if not s.shock_scheduled and self._rng.random() < 0.05:
+            # Schedule a shock for next month — agent sees noisy signal now
+            s.shock_scheduled = True
+            s.shock_magnitude = self._rng.uniform(0.10, 0.22)
+            s.shock_signal_strength = self._rng.uniform(0.35, 0.75)
 
         # Anti-hack v2: MONOTONIC STRATEGY detection
         # Track consecutive identical Phase 2 actions
@@ -500,6 +534,7 @@ class MicrofinanceEnvironment(Environment):
             missed_streak=s.missed_streak, ontime_streak=s.ontime_streak,
             payment_history=list(s.payment_history),
             intervention_history=list(s.intervention_history),
+            economic_stress_signal=s.shock_signal_strength if s.shock_scheduled else 0.0,
             current_phase=s.phase.value,
             last_action_result=msg, done=done, reward=reward,
         )
