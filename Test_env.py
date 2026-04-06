@@ -962,6 +962,100 @@ def test_episode_logger():
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# TEST 23: APPROVE returns APPLICATION phase with transition flag (Bug 3)
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_approve_returns_application_phase_with_transition_flag():
+    """APPROVE response must have current_phase=APPLICATION and transitioning_to_phase2=True."""
+    print("\n" + "═"*60)
+    print("TEST 23: APPROVE returns APPLICATION phase with transition flag")
+    print("═"*60)
+    env = MicrofinanceEnvironment(seed=42)
+    env.reset()
+    obs = env.step(CreditAction(action_type="APPROVE", rationale="test transition"))
+    check(obs.current_phase == "APPLICATION",
+          f"APPROVE must return current_phase=APPLICATION (got '{obs.current_phase}')")
+    check(obs.transitioning_to_phase2 is True,
+          f"APPROVE must set transitioning_to_phase2=True (got {obs.transitioning_to_phase2})")
+    check(not hasattr(obs, 'signal_quality') or getattr(obs, 'signal_quality', None) is None,
+          "APPROVE response must NOT contain signal_quality (Phase 1 schema)")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TEST 24: Step after APPROVE returns clean Phase 2 observation (Bug 3)
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_second_step_after_approve_returns_clean_phase2():
+    """Step after APPROVE must return full MonitoringObservation, no transition flag."""
+    print("\n" + "═"*60)
+    print("TEST 24: Step after APPROVE returns clean Phase 2")
+    print("═"*60)
+    env = MicrofinanceEnvironment(seed=42)
+    env.reset()
+    env.step(CreditAction(action_type="APPROVE", rationale="transition"))
+    obs = env.step(CreditAction(action_type="DO_NOTHING", rationale="first phase2 step"))
+    check(obs.current_phase == "MONITORING",
+          f"Post-approve step must return current_phase=MONITORING (got '{obs.current_phase}')")
+    check(getattr(obs, 'transitioning_to_phase2', False) is not True,
+          "Post-approve step must NOT have transitioning_to_phase2=True")
+    check(obs.signal_quality is not None,
+          "Post-approve step must have signal_quality set")
+    check(0.0 <= obs.signal_quality <= 1.0,
+          f"signal_quality must be in [0,1] (got {obs.signal_quality})")
+    check(obs.month_number is not None and obs.month_number >= 1,
+          f"month_number must be >= 1 (got {obs.month_number})")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TEST 25: Redundant doc request still returns documents_submitted (Bug 2)
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_redundant_doc_request_still_returns_documents_submitted():
+    """documents_submitted must be present in obs even after redundant request."""
+    print("\n" + "═"*60)
+    print("TEST 25: Redundant doc request returns documents_submitted")
+    print("═"*60)
+    env = MicrofinanceEnvironment(seed=42)
+    env.reset()
+    env.step(CreditAction(action_type="REQUEST_INCOME_PROOF", rationale="first"))
+    obs = env.step(CreditAction(action_type="REQUEST_INCOME_PROOF", rationale="duplicate"))
+    check(hasattr(obs, 'documents_submitted'),
+          "documents_submitted field must exist in observation")
+    check("income_proof" in obs.documents_submitted,
+          f"income_proof must be in documents_submitted (got {obs.documents_submitted})")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TEST 26: Reset always returns APPLICATION phase (Bug 1)
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_reset_returns_application_phase():
+    """Reset must always return current_phase=APPLICATION so buttons are correctly initialized."""
+    print("\n" + "═"*60)
+    print("TEST 26: Reset returns APPLICATION phase")
+    print("═"*60)
+    # Use noisy_signals task — no pre-revealed info, so documents_submitted is truly empty
+    env = MicrofinanceEnvironment(seed=42, task_name="noisy_signals")
+    # First run an episode to completion
+    env.reset()
+    env.step(CreditAction(action_type="REQUEST_INCOME_PROOF", rationale="gather info"))
+    env.step(CreditAction(action_type="REJECT", rationale="end episode"))
+    # Now reset again — must clear all state
+    obs = env.reset()
+    check(obs.current_phase == "APPLICATION",
+          f"Reset must return current_phase=APPLICATION (got '{obs.current_phase}')")
+    check(getattr(obs, 'transitioning_to_phase2', False) is not True,
+          "Reset must NOT have transitioning_to_phase2=True")
+    check(obs.documents_submitted == [],
+          f"Reset must have empty documents_submitted (got {obs.documents_submitted})")
+    # Also verify basic_lending correctly pre-reveals income
+    env2 = MicrofinanceEnvironment(seed=42, task_name="basic_lending")
+    obs2 = env2.reset()
+    check("income_proof" in obs2.documents_submitted,
+          f"basic_lending must pre-reveal income_proof (got {obs2.documents_submitted})")
+
+
+# ══════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     test_blind_approve_loses()
@@ -987,6 +1081,11 @@ if __name__ == "__main__":
     test_no_single_strategy_dominates()
     test_phase2_monotonic_penalty()
     test_episode_logger()
+    # v2 bug-fix verification tests
+    test_approve_returns_application_phase_with_transition_flag()
+    test_second_step_after_approve_returns_clean_phase2()
+    test_redundant_doc_request_still_returns_documents_submitted()
+    test_reset_returns_application_phase()
 
     print("\n" + "═"*60)
     print(f"RESULTS: {passed} passed, {failed} failed out of {passed + failed} checks")

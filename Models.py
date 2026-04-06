@@ -82,6 +82,7 @@ class ApplicantObservation(Observation):
     info_confidence        : float          = 0.0   # [0,1] — shown to agent
     current_phase          : str            = "APPLICATION"
     last_action_result     : str            = ""
+    transitioning_to_phase2: bool           = False
  
  
 # ── Phase 2 Observation ────────────────────────────────────────────────────

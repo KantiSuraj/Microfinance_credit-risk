@@ -489,6 +489,95 @@
         /* ── Pulse animation ── */
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
         .pulsing { animation: pulse 1.5s ease-in-out infinite; }
+
+        /* ── Collected doc button state (Bug 2) ── */
+        .action-btn.collected {
+            border: 1px solid #22c55e;
+            opacity: 0.75;
+            position: relative;
+        }
+        .action-btn.collected::after {
+            content: '✓';
+            position: absolute;
+            top: 4px;
+            right: 6px;
+            color: #22c55e;
+            font-size: 11px;
+        }
+
+        /* ── Phase transition banner (Bug 3) ── */
+        .phase-status-banner {
+            padding: 10px 16px;
+            background: rgba(139, 92, 246, 0.12);
+            border: 1px solid rgba(139, 92, 246, 0.3);
+            border-radius: var(--radius-sm);
+            color: var(--accent-purple);
+            font-size: 13px;
+            font-weight: 500;
+            text-align: center;
+            margin-bottom: 16px;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        /* ── Phase goal header ── */
+        .phase-goal {
+            padding: 10px 14px;
+            background: rgba(6, 182, 212, 0.08);
+            border: 1px solid rgba(6, 182, 212, 0.2);
+            border-radius: var(--radius-sm);
+            color: var(--accent-cyan);
+            font-size: 12px;
+            font-weight: 500;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* ── Transition panel (APPROVE → Phase 2) ── */
+        .transition-panel {
+            text-align: center;
+            padding: 32px 24px;
+            background: rgba(16, 185, 129, 0.06);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            border-radius: var(--radius);
+            margin-bottom: 20px;
+        }
+        .transition-panel h3 {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            color: var(--accent-green);
+        }
+        .transition-panel p {
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 20px;
+            line-height: 1.6;
+        }
+        .transition-panel .transition-detail {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 16px;
+        }
+        .btn-continue {
+            background: var(--gradient-3);
+            border: none;
+            color: white;
+            font-family: 'Inter', sans-serif;
+            font-weight: 700;
+            padding: 14px 32px;
+            font-size: 14px;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: all 0.25s ease;
+            box-shadow: 0 4px 15px rgba(16, 185, 129, 0.3);
+            letter-spacing: 0.3px;
+        }
+        .btn-continue:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 25px rgba(16, 185, 129, 0.4);
+        }
     </style>
 </head>
 <body>
@@ -551,6 +640,12 @@
             <div class="card-header">
                 <div class="card-title"><span class="dot dot-blue"></span> <span id="panelTitle">Applicant Profile</span></div>
                 <span class="badge badge-blue" id="phaseBadge">PHASE 1</span>
+            </div>
+
+            <!-- Phase Goal Header -->
+            <div class="phase-goal" id="phaseGoal">
+                <span>🎯</span>
+                <span id="phaseGoalText">Gather evidence before making a lending decision</span>
             </div>
 
             <!-- Phase 1 Info -->
@@ -651,6 +746,17 @@
                 </div>
             </div>
 
+            <!-- Transition Panel (APPROVE → Phase 2) -->
+            <div id="transitionPanel" class="hidden">
+                <div class="transition-panel">
+                    <div style="font-size: 48px; margin-bottom: 12px;">✅</div>
+                    <h3>Loan Approved</h3>
+                    <p id="transitionMessage">Monitoring phase will begin. You'll track monthly repayments and intervene to prevent defaults.</p>
+                    <div class="transition-detail" id="transitionDetail"></div>
+                    <button class="btn-continue" onclick="doStep('DO_NOTHING')">Start Monitoring →</button>
+                </div>
+            </div>
+
             <!-- Reward History -->
             <div style="margin-top:20px;">
                 <div class="info-label">Reward History</div>
@@ -688,6 +794,7 @@
     let stepCount = 0;
     let rewards = [];
     let episodeActive = false;
+    let transitioning = false;
 
     async function resetEnv() {
         try {
@@ -749,7 +856,7 @@
         } catch (e) {
             addLog('ERROR', e.message, 0);
         } finally {
-            if (episodeActive) {
+            if (episodeActive && !transitioning) {
                 const btns = document.querySelectorAll(
                     currentPhase === 'MONITORING' ? '#phase2Actions .action-btn' : '#phase1Actions .action-btn'
                 );
@@ -758,10 +865,40 @@
         }
     }
 
+    function enableButtonsForPhase(phase) {
+        // Remove collected markers on all buttons (re-applied below from backend truth)
+        document.querySelectorAll('.action-btn').forEach(b => b.classList.remove('collected'));
+
+        if (phase === 'APPLICATION' || phase == null) {
+            document.querySelectorAll('#phase1Actions .action-btn').forEach(b => b.disabled = false);
+            document.querySelectorAll('#phase2Actions .action-btn').forEach(b => b.disabled = true);
+        } else if (phase === 'MONITORING') {
+            document.querySelectorAll('#phase1Actions .action-btn').forEach(b => b.disabled = true);
+            document.querySelectorAll('#phase2Actions .action-btn').forEach(b => b.disabled = false);
+        }
+    }
+
     function updateObservation(data) {
         const obs = data.observation || {};
         const phase = obs.current_phase || 'APPLICATION';
+        const isTransitioning = obs.transitioning_to_phase2 === true;
         currentPhase = phase;
+        transitioning = isTransitioning;
+
+        // Bug 1: Phase-aware button enable on every observation update
+        enableButtonsForPhase(phase);
+
+        // Handle transition state: show transition panel, hide action buttons
+        if (isTransitioning) {
+            document.getElementById('phase1Actions').classList.add('hidden');
+            document.getElementById('phase2Actions').classList.add('hidden');
+            document.getElementById('transitionPanel').classList.remove('hidden');
+            // Show signal quality info in transition panel
+            const msg = obs.last_action_result || '';
+            document.getElementById('transitionDetail').textContent = msg;
+        } else {
+            document.getElementById('transitionPanel').classList.add('hidden');
+        }
 
         // Update reward
         const totalReward = data.reward || 0;
@@ -773,11 +910,18 @@
             // Phase 1
             document.getElementById('phase1Info').classList.remove('hidden');
             document.getElementById('phase2Info').classList.add('hidden');
-            document.getElementById('phase1Actions').classList.remove('hidden');
+            if (!isTransitioning) {
+                document.getElementById('phase1Actions').classList.remove('hidden');
+            }
             document.getElementById('phase2Actions').classList.add('hidden');
             document.getElementById('phaseBadge').textContent = 'PHASE 1';
             document.getElementById('phaseBadge').className = 'badge badge-blue';
             document.getElementById('panelTitle').textContent = 'Applicant Profile';
+
+            // Phase goal
+            document.getElementById('phaseGoalText').textContent = isTransitioning
+                ? 'Loan approved! Click "Start Monitoring" to begin Phase 2'
+                : 'Gather evidence before making a lending decision';
 
             document.getElementById('vAppId').textContent = obs.applicant_id || '—';
             document.getElementById('vOccupation').textContent = (obs.occupation || '—').replace(/_/g, ' ');
@@ -825,22 +969,34 @@
             document.getElementById('phaseBadge').textContent = 'PHASE 2';
             document.getElementById('phaseBadge').className = 'badge badge-amber';
             document.getElementById('panelTitle').textContent = 'Loan Monitoring';
+            // Phase goal for monitoring
+            document.getElementById('phaseGoalText').textContent =
+                'Monitor repayments and intervene to prevent defaults';
 
-            const totalM = obs.month_number + obs.months_remaining;
-            document.getElementById('vMonth').textContent = `${obs.month_number} / ${totalM}`;
-            document.getElementById('vSignalQ').textContent = `${(obs.signal_quality * 100).toFixed(0)}%`;
-            document.getElementById('vSignalQPct').textContent = `${(obs.signal_quality * 100).toFixed(0)}%`;
-            document.getElementById('signalFill').style.width = `${obs.signal_quality * 100}%`;
+            // Bug 3: Defensive null guards — missing ≠ zero
+            const sq = obs.signal_quality;
+            const monthNum = obs.month_number;
+            const monthsRem = obs.months_remaining;
+            const totalM = (monthNum ?? 0) + (monthsRem ?? 0);
+
+            document.getElementById('vMonth').textContent =
+                (monthNum != null) ? `${monthNum} / ${totalM}` : 'Transitioning...';
+            document.getElementById('vSignalQ').textContent =
+                (sq != null && !isNaN(sq)) ? `${(sq * 100).toFixed(0)}%` : '—';
+            document.getElementById('vSignalQPct').textContent =
+                (sq != null && !isNaN(sq)) ? `${(sq * 100).toFixed(0)}%` : '—';
+            document.getElementById('signalFill').style.width =
+                (sq != null && !isNaN(sq)) ? `${sq * 100}%` : '0%';
 
             const payment = document.getElementById('vPayment');
-            payment.textContent = obs.observed_payment;
+            payment.textContent = obs.observed_payment ?? '—';
             payment.className = 'info-value ' + (obs.observed_payment === 'ON_TIME' ? 'revealed' : '');
             if (obs.observed_payment === 'MISSED') payment.style.color = 'var(--accent-red)';
             else payment.style.color = '';
 
-            document.getElementById('vMisses').textContent = obs.cumulative_misses;
-            document.getElementById('vMissStreak').textContent = obs.missed_streak;
-            document.getElementById('vOnStreak').textContent = obs.ontime_streak;
+            document.getElementById('vMisses').textContent = obs.cumulative_misses ?? '—';
+            document.getElementById('vMissStreak').textContent = obs.missed_streak ?? '—';
+            document.getElementById('vOnStreak').textContent = obs.ontime_streak ?? '—';
 
             // Payment timeline
             const timeline = document.getElementById('paymentTimeline');
@@ -859,9 +1015,16 @@
                 timeline.appendChild(dot);
             }
 
-            document.getElementById('stepBadge').textContent = `Month ${obs.month_number}/${totalM}`;
+            document.getElementById('stepBadge').textContent =
+                (monthNum != null) ? `Month ${monthNum}/${totalM}` : 'Transitioning...';
             updatePhaseIndicator('MONITORING');
         }
+
+        // Bug 2: Derive collected-doc state from backend, never track client-side
+        const docs = obs.documents_submitted || [];
+        document.getElementById('btnIncome').classList.toggle('collected', docs.includes('income_proof'));
+        document.getElementById('btnCredit').classList.toggle('collected', docs.includes('credit_history'));
+        document.getElementById('btnFlag').classList.toggle('collected', docs.includes('senior_review'));
 
         document.getElementById('vMessage').textContent = obs.last_action_result || '—';
     }

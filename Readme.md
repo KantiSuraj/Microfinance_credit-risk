@@ -183,6 +183,30 @@ The environment models the **full loan lifecycle**, not just the approval moment
 └───────────────────────────────────────────────────────────┘
 ```
 
+## 🔄 Phase Transition (Important Detail)
+
+When the agent selects APPROVE, the environment performs a clean transition step:
+
+Internally, the environment immediately switches to Phase 2 (MONITORING)
+However, the response for that step still returns a Phase 1 observation
+The next step begins Phase 2 with a proper MonitoringObservation
+Step N: APPROVE
+→ Returns Phase 1 observation (with transition flag)
+
+Step N+1:
+→ Phase 2 begins with full monitoring signals
+Why this design?
+
+This avoids mixing observation types and ensures:
+
+❌ No undefined fields (prevents NaN errors)
+❌ No fabricated signals (e.g., fake payment status at month 0)
+✅ Clean RL trajectories for agents
+✅ Consistent API schema per step
+
+A transitioning_to_phase2 flag is included so the UI and agents can handle this boundary explicitly.
+
+
 ### 🔑 The Key Mechanic: Signal Quality Propagation
 
 This is what makes the two phases **causally linked**:
@@ -371,7 +395,7 @@ openenv push
 ---
 
 <p align="center">
-  <b>Built by Suraj Kanti</b><br>
+  <b>Built by </b><br>
   <i>"This environment simulates how loan officers make decisions with incomplete information.<br>
   The agent must decide whether to request more documents or act early — balancing risk and cost."</i>
 </p>

@@ -305,9 +305,11 @@ class MicrofinanceEnvironment(Environment):
             correct          = p.ground_truth_label == "APPROVE"
             return self._obs_phase1(
                 f"APPROVED at {conf:.0%} confidence. "
-                f"Phase 2 starts — signal quality {s.signal_quality:.0%}. "
+                f"Phase 2 starts next step — signal quality {s.signal_quality:.0%}. "
                 f"Phase 1 reward: {reward:+.3f}.",
                 done=False, reward=reward,
+                current_phase="APPLICATION",
+                transitioning_to_phase2=True,
             )
 
         elif atype == "REJECT":
@@ -460,7 +462,8 @@ class MicrofinanceEnvironment(Environment):
     # Observation builders
     # ══════════════════════════════════════════════════════════════════════
 
-    def _obs_phase1(self, msg, *, done=False, reward=0.0) -> ApplicantObservation:
+    def _obs_phase1(self, msg, *, done=False, reward=0.0,
+                    current_phase=None, transitioning_to_phase2=False) -> ApplicantObservation:
         s, p = self._state, self._profile
         docs = (
             (["income_proof"]   if s.income_revealed         else []) +
@@ -480,8 +483,9 @@ class MicrofinanceEnvironment(Environment):
             step_count=s.step_count, max_steps=self._task_config.max_phase1_steps,
             documents_submitted=docs,
             info_confidence=RE.info_confidence(s.income_revealed, s.credit_history_revealed),
-            current_phase=s.phase.value,
+            current_phase=(current_phase or s.phase.value),
             last_action_result=msg, done=done, reward=reward,
+            transitioning_to_phase2=transitioning_to_phase2,
         )
 
     def _obs_phase2(self, month, observed_status, msg, *, done, reward) -> MonitoringObservation:
