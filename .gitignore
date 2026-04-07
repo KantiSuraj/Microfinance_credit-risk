@@ -1,4 +1,4 @@
-venv/
+
 .vscode/
 __pycache__/
 
@@ -8,6 +8,7 @@ Thumbs.db
 
 # Logs
 *.log
+.venv/
 
 # Temp files
 *.tmp
