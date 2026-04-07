@@ -4,6 +4,7 @@
 
 ---
 
+
 ## ❓ The Problem: Decisions Under Uncertainty
 
 In India, **80 million+ microfinance borrowers** depend on loan officers making fast decisions with **incomplete, noisy, and conflicting information**.
@@ -185,27 +186,26 @@ The environment models the **full loan lifecycle**, not just the approval moment
 
 ## 🔄 Phase Transition (Important Detail)
 
-When the agent selects APPROVE, the environment performs a clean transition step:
+When the agent selects `APPROVE`, the environment performs a clean two-step transition:
 
-Internally, the environment immediately switches to Phase 2 (MONITORING)
-However, the response for that step still returns a Phase 1 observation
-The next step begins Phase 2 with a proper MonitoringObservation
-Step N: APPROVE
-→ Returns Phase 1 observation (with transition flag)
+```
+Step N:   Agent sends APPROVE
+          └─ Returns Phase 1 observation (with transitioning_to_phase2=True flag)
+          └─ Environment internally switches to MONITORING state
 
-Step N+1:
-→ Phase 2 begins with full monitoring signals
-Why this design?
+Step N+1: First monitoring step
+          └─ Returns Phase 2 MonitoringObservation (signal_quality set, month_number=1)
+          └─ transitioning_to_phase2 flag is absent — full Phase 2 schema in effect
+```
 
-This avoids mixing observation types and ensures:
+**Why this design?** It avoids mixing observation types within a single step, which ensures:
 
-❌ No undefined fields (prevents NaN errors)
-❌ No fabricated signals (e.g., fake payment status at month 0)
-✅ Clean RL trajectories for agents
-✅ Consistent API schema per step
+- ❌ No undefined fields (prevents NaN errors in agent code)
+- ❌ No fabricated signals (e.g., fake payment status at month 0)
+- ✅ Clean RL trajectories — each step has exactly one schema
+- ✅ Consistent API contract — agents and UI can rely on `transitioning_to_phase2` as an explicit boundary signal
 
-A transitioning_to_phase2 flag is included so the UI and agents can handle this boundary explicitly.
-
+---
 
 ### 🔑 The Key Mechanic: Signal Quality Propagation
 
@@ -295,9 +295,14 @@ microfinance_env/
 │   ├── episode_logger.py         # Pattern detection & logging
 │   └── Dockerfile                # Container deployment
 │
-├── test_env.py                   # 22 adversarial tests (54 checks)
+├── test_env.py                   # 26 adversarial tests (68 checks)
+├── test_anticlassification.py    # Causal impact validation (Phase 1 → Phase 2)
 └── requirements.txt
 ```
+
+The environment exposes both HTTP and WebSocket interfaces.
+The UI uses HTTP endpoints for simplicity, while agent clients
+can connect via WebSocket for persistent sessions
 
 ---
 
@@ -371,7 +376,7 @@ The environment is hardened against exploitation. No lazy or dumb strategy can c
 | **Behavioral Baselines** | Strict ordering: informed > random > blind > always-reject |
 | **Monotonic Strategy Penalty** | Doing the same Phase 2 action 4+ months straight → escalating cost |
 
-**Test suite: 22 tests, 54 checks — all passing.** ✅
+**Test suite: 26 tests, 68 checks — all passing.** ✅
 
 ---
 
@@ -390,7 +395,7 @@ openenv push
 
 ## 📌 Status
 
-✅ **Version 2.1** — Anti-Reward-Hacking hardened. 54/54 adversarial checks passing.
+✅ **Version 2.1** — Anti-Reward-Hacking hardened. 68/68 adversarial checks passing.
 
 ---
 
