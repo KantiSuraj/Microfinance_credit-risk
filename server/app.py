@@ -48,19 +48,20 @@ def _env_factory():
 # ── Create the ASGI app ────────────────────────────────────────────────────
 app = create_fastapi_app(_env_factory, CreditAction, ApplicantObservation)
 
-# ── Serve dashboard UI ─────────────────────────────────────────────────────
-_static_dir = os.path.join("/Microfinance_credit-risk/server/static")
-#_static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+_static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
+if os.path.exists(_static_dir):
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
-app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+    @app.get("/", include_in_schema=False)
+    async def root():
+        return FileResponse(os.path.join(_static_dir, "index.html"))
+else:
+    print(f"[WARNING] Static directory not found: {_static_dir}")
 
-
-@app.get("/", include_in_schema=False)
-async def root():
-    return FileResponse(os.path.join(_static_dir, "index.html"))
-
-#app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+    @app.get("/", include_in_schema=False)
+    async def root():
+        return {"error": "Static UI not found. Check /server/static folder."}
 
 
 
@@ -78,3 +79,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    
