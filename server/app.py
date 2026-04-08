@@ -77,6 +77,21 @@ def main():
     )
 
 
+from fastapi.responses import HTMLResponse
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def root_override():
+    index_path = os.path.join(_static_dir, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return "<h1>UI not found</h1>"
+
+
+@app.get("/web", include_in_schema=False)
+async def web():
+    return await root_override()
+
+
 if __name__ == "__main__":
     main()
 
