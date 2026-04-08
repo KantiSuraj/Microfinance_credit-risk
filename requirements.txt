@@ -54,8 +54,6 @@ markdown-it-py==4.0.0
 MarkupSafe==3.0.3
 mcp==1.27.0
 mdurl==0.1.2
--e git+https://github.com/KantiSuraj/Microfinance_credit-risk@f549a2119553e973d91bace090b509847a6f1733#egg=microfinance_env
-more-itertools==11.0.1
 numpy==2.4.4
 openai==2.30.0
 openapi-pydantic==0.5.1

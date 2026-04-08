@@ -1,3 +1,11 @@
+---
+title: Microfinance Credit Decision Environment
+emoji: 🏦
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 8000
+---
 # 🏦 Microfinance Credit Decision Environment
 
 > An RL environment where an agent must decide whether to approve a micro-loan — but it can't see the full picture. It must pay to gather evidence, and every wrong approval costs lives.
