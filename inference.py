@@ -18,6 +18,8 @@ against a running local server instance.
 import os
 import sys
 import json
+import time
+import subprocess
 import textwrap
 import httpx
 from typing import List, Optional
@@ -26,12 +28,17 @@ from openai import OpenAI
 
 # ── Configuration ─────────────────────────────────────────────────────────
 
+from dotenv import load_dotenv
+load_dotenv()
+
 API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME   = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 SERVER_URL   = os.getenv("SERVER_URL", "http://localhost:8000")
+IMAGE_NAME   = os.getenv("IMAGE_NAME", "microfinance-env")
 
 BENCHMARK    = "microfinance-env"
+
 
 TASKS = [
     {
@@ -60,10 +67,44 @@ MAX_TOKENS  = 300
 SUCCESS_THRESHOLD = 0.40  # normalised score in [0, 1]
 
 
+# ── Docker Control ────────────────────────────────────────────────────────
+
+def start_container():
+    print("[INFO] Starting Docker container...", flush=True)
+
+    container_id = subprocess.check_output([
+        "docker", "run", "-d", "-p", "8000:8000", IMAGE_NAME
+    ]).decode().strip()
+
+    return container_id
+
+
+def wait_for_server():
+    print("[INFO] Waiting for server...", flush=True)
+
+    for _ in range(30):
+        try:
+            r = httpx.get(f"{SERVER_URL}/health", timeout=2.0)
+            if r.status_code == 200:
+                print("[INFO] Server is ready!", flush=True)
+                return
+        except:
+            pass
+        time.sleep(1)
+
+    raise RuntimeError("Server did not start")
+
+
+def stop_container(container_id):
+    print("[INFO] Stopping container...", flush=True)
+    subprocess.run(["docker", "stop", container_id], stdout=subprocess.DEVNULL)
+    subprocess.run(["docker", "rm", container_id], stdout=subprocess.DEVNULL)
+
+
 # ── Stdout logging (exact format per spec) ────────────────────────────────
 
 def log_start(task: str, env: str, model: str) -> None:
-    print(f"[START] task={task} env={env} model={model}", flush=True)
+    print(f"[START] task={task} env={BENCHMARK} model={MODEL_NAME}", flush=True)
 
 
 def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
