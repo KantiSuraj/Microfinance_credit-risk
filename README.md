@@ -12,7 +12,6 @@ app_port: 8000
 
 ---
 
-
 ## ❓ The Problem: Decisions Under Uncertainty
 
 In India, **80 million+ microfinance borrowers** depend on loan officers making fast decisions with **incomplete, noisy, and conflicting information**.
@@ -292,7 +291,7 @@ microfinance_env/
 ├── models.py                     # Action, Observation, State contracts
 ├── client.py                     # Two-phase client wrapper
 ├── openenv.yaml                  # OpenEnv specification
-│
+│── Dockerfile                    # Container deployment
 ├── server/
 │   ├── app.py                    # FastAPI server (OpenEnv interface)
 │   ├── microfinance_env_environment.py  # Core environment logic
@@ -301,7 +300,7 @@ microfinance_env/
 │   ├── counterfactual.py         # Soft counterfactual oracle
 │   ├── data_generator.py         # Synthetic dataset generator
 │   ├── episode_logger.py         # Pattern detection & logging
-│   └── Dockerfile                # Container deployment
+│   
 │
 ├── test_env.py                   # 26 adversarial tests (68 checks)
 ├── test_anticlassification.py    # Causal impact validation (Phase 1 → Phase 2)
@@ -314,14 +313,53 @@ can connect via WebSocket for persistent sessions
 
 ---
 
-## 🚀 Quick Start
+## 🤖 Running Inference (Judge / Evaluation)
+
+The evaluation pipeline is fully automated via `inference.py`.
+
+### Required Environment Variables
+
+```bash
+export HF_TOKEN=your_huggingface_token
+export IMAGE_NAME=surajkanti/microfinance-env
+export MODEL_NAME=Qwen/Qwen2.5-72B-Instruct  # or any OpenAI-compatible model
+```
+
+### Run
+
+```bash
+python inference.py
+```
+
+### Live Environment (no local setup needed)
+
+The environment is already deployed and publicly accessible:
+
+> **🤗 HuggingFace Space:** https://kantisuraj-microfinance-env.hf.space
+
+Point `inference.py` at this URL to skip Docker entirely.
+
+### Minimal Host Dependencies
+
+```bash
+pip install openai httpx
+```
+
+Alternatively: `pip install -r requirements.txt`
+
+---
+
+## 🚀 Quick Start (Local)
 
 ```bash
 # 1. Activate environment
+# Windows
 venv\Scripts\activate
+# Linux / Mac
+source venv/bin/activate
 
 # 2. Start server
-uvicorn microfinance_env.server.app:app --reload
+uvicorn server.app:app --reload
 # → http://localhost:8000
 
 # 3. Run baseline agent
@@ -391,8 +429,8 @@ The environment is hardened against exploitation. No lazy or dumb strategy can c
 ## 🐳 Deployment
 
 ```bash
-# Docker
-docker build -t microfinance-env -f server/Dockerfile .
+# Docker (Dockerfile is at the project root)
+docker build -t microfinance-env .
 docker run -p 8000:8000 microfinance-env
 
 # OpenEnv
@@ -408,7 +446,7 @@ openenv push
 ---
 
 <p align="center">
-  <b>Built by </b><br>
+  <b>Built by Suraj & Team </b><br>
   <i>"This environment simulates how loan officers make decisions with incomplete information.<br>
   The agent must decide whether to request more documents or act early — balancing risk and cost."</i>
 </p>
