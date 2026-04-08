@@ -304,7 +304,12 @@ def run_task(task_config: dict, llm_client: OpenAI, http_client: httpx.Client) -
             reward = result.get("reward", 0.0)
             done   = result.get("done", False)
             error  = obs.get("last_action_error", None)
-            phase  = obs.get("current_phase", phase)
+            
+            # Switch to Phase 2 promptly if the transition flag is raised
+            if obs.get("transitioning_to_phase2", False):
+                phase = "MONITORING"
+            else:
+                phase = obs.get("current_phase", phase)
 
             rewards.append(reward)
             steps_taken = step
