@@ -1,6 +1,12 @@
-
-.vscode/
+# Python
 __pycache__/
+*.pyc
+
+# Virtual environment
+.venv/
+
+# IDE
+.vscode/
 
 # OS files
 .DS_Store
@@ -8,20 +14,38 @@ Thumbs.db
 
 # Logs
 *.log
-.venv/
 
 # Temp files
 *.tmp
 *.tempCodeRunnerFile
-.implementation.md
 
-# Jupyter (if any)
+# Jupyter
 .ipynb_checkpoints/
 
-# Build files
+# Build
 dist/
 build/
 *.egg-info/
 
-# Environment variables
+# Environment
 .env
+
+# ML / AI related (CRITICAL)
+models/
+data/
+*.pt
+*.pth
+*.bin
+*.pkl
+*.joblib
+*.h5
+
+# Hugging Face / cache
+.cache/
+huggingface/
+*.safetensors
+
+# Misc large files
+*.zip
+*.tar
+*.gz
