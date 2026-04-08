@@ -29,8 +29,8 @@ from openenv.core.env_server.types import State
 
 import sys, os
 # Add both project root and server/ dir for clean imports
-#sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))          # server/
-#sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))          # server/
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 
 from models import (
     CreditAction, ApplicantObservation, MonitoringObservation,

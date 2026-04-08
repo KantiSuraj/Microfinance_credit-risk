@@ -49,13 +49,20 @@ def _env_factory():
 app = create_fastapi_app(_env_factory, CreditAction, ApplicantObservation)
 
 # ── Serve dashboard UI ─────────────────────────────────────────────────────
-_static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+_static_dir = os.path.join("/Microfinance_credit-risk/server/static")
+#_static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+
+app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
 
 @app.get("/", include_in_schema=False)
 async def root():
     return FileResponse(os.path.join(_static_dir, "index.html"))
 
-app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+#app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
+
 
 
 # ── Entry point for OpenEnv runner ─────────────────────────────────
