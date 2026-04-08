@@ -70,7 +70,7 @@ SUCCESS_THRESHOLD = 0.40  # normalised score in [0, 1]
 # ── Docker Control ────────────────────────────────────────────────────────
 
 def start_container():
-    print("[INFO] Starting Docker container...", flush=True)
+    print("[INFO] Starting Docker container...", file=sys.stderr, flush=True)
 
     container_id = subprocess.check_output([
         "docker", "run", "-d", "-p", "8000:8000", IMAGE_NAME
@@ -80,13 +80,13 @@ def start_container():
 
 
 def wait_for_server():
-    print("[INFO] Waiting for server...", flush=True)
+    print("[INFO] Waiting for server...", file=sys.stderr, flush=True)
 
     for _ in range(30):
         try:
             r = httpx.get(f"{SERVER_URL}/health", timeout=2.0)
             if r.status_code == 200:
-                print("[INFO] Server is ready!", flush=True)
+                print("[INFO] Server is ready!", file=sys.stderr, flush=True)
                 return
         except:
             pass
@@ -96,7 +96,7 @@ def wait_for_server():
 
 
 def stop_container(container_id):
-    print("[INFO] Stopping container...", flush=True)
+    print("[INFO] Stopping container...", file=sys.stderr, flush=True)
     subprocess.run(["docker", "stop", container_id], stdout=subprocess.DEVNULL)
     subprocess.run(["docker", "rm", container_id], stdout=subprocess.DEVNULL)
 
@@ -243,7 +243,7 @@ def get_llm_action(client: OpenAI, obs: dict, step: int, phase: str) -> dict:
             "rationale": parsed.get("reasoning", ""),
         }
     except Exception as exc:
-        print(f"[DEBUG] LLM request failed: {exc}", flush=True)
+        print(f"[DEBUG] LLM request failed: {exc}", file=sys.stderr, flush=True)
         # Fallback: phase-appropriate default
         if phase == "APPLICATION":
             return {"action_type": "APPROVE", "rationale": "fallback"}
@@ -331,7 +331,7 @@ def run_task(task_config: dict, llm_client: OpenAI, http_client: httpx.Client) -
         success = score >= SUCCESS_THRESHOLD
 
     except Exception as exc:
-        print(f"[DEBUG] Task {task_name} failed: {exc}", flush=True)
+        print(f"[DEBUG] Task {task_name} failed: {exc}", file=sys.stderr, flush=True)
 
     finally:
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
@@ -342,30 +342,30 @@ def run_task(task_config: dict, llm_client: OpenAI, http_client: httpx.Client) -
 def main() -> None:
     """Run all 3 tasks sequentially."""
     if not API_KEY:
-        print("[ERROR] HF_TOKEN or API_KEY environment variable not set.", flush=True)
+        print("[ERROR] HF_TOKEN or API_KEY environment variable not set.", file=sys.stderr, flush=True)
         sys.exit(1)
 
     llm_client  = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     http_client = httpx.Client(timeout=30.0)
 
-    print(f"[INFO] Running inference against {SERVER_URL}", flush=True)
-    print(f"[INFO] Model: {MODEL_NAME}", flush=True)
-    print(f"[INFO] Tasks: {[t['name'] for t in TASKS]}", flush=True)
-    print("", flush=True)
+    print(f"[INFO] Running inference against {SERVER_URL}", file=sys.stderr, flush=True)
+    print(f"[INFO] Model: {MODEL_NAME}", file=sys.stderr, flush=True)
+    print(f"[INFO] Tasks: {[t['name'] for t in TASKS]}", file=sys.stderr, flush=True)
+    print("", file=sys.stderr, flush=True)
 
     scores = {}
     for task in TASKS:
         scores[task["name"]] = run_task(task, llm_client, http_client)
-        print("", flush=True)
+        print("", file=sys.stderr, flush=True)
 
     # Summary
-    print("=" * 60, flush=True)
-    print("INFERENCE SUMMARY", flush=True)
-    print("=" * 60, flush=True)
+    print("=" * 60, file=sys.stderr, flush=True)
+    print("INFERENCE SUMMARY", file=sys.stderr, flush=True)
+    print("=" * 60, file=sys.stderr, flush=True)
     for name, sc in scores.items():
-        print(f"  {name:30s}: {sc:.2f}", flush=True)
+        print(f"  {name:30s}: {sc:.2f}", file=sys.stderr, flush=True)
     avg = sum(scores.values()) / len(scores) if scores else 0.0
-    print(f"  {'AVERAGE':30s}: {avg:.2f}", flush=True)
+    print(f"  {'AVERAGE':30s}: {avg:.2f}", file=sys.stderr, flush=True)
 
 
 if __name__ == "__main__":
