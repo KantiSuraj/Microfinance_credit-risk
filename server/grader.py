@@ -24,8 +24,8 @@ from dataclasses import dataclass, field
 from typing import Optional, List
 
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from counterfactual import counterfactual_grade_modifier
+#sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from server.counterfactual import counterfactual_grade_modifier
 
 
 @dataclass

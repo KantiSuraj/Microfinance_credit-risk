@@ -18,14 +18,14 @@ import sys
 import os
 
 # Ensure both server/ dir and project root are on the path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))           # server/
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
+#sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))           # server/
+#sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 
 from openenv.core.env_server import create_fastapi_app
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from models import CreditAction, ApplicantObservation
-from microfinance_env_environment import MicrofinanceEnvironment
+from server.microfinance_env_environment import MicrofinanceEnvironment
 
 # ── Instantiate environment ────────────────────────────────────────────────
 # DATASET_SIZE, SEED, and TASK_NAME are read from env vars so the Dockerfile
