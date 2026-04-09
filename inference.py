@@ -79,12 +79,193 @@ TASKS = [
 # MicrofinanceEnv extends EnvClient (HTTP-only). There is no from_docker_image().
 # Docker must be managed manually here.
 
+def _find_free_port() -> int:
+    """Find a free TCP port on localhost to avoid bind conflicts.
+    Pure-Python / cross-platform (Windows, macOS, Linux).
+    """
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return s.getsockname()[1]
+
+
+def _kill_process_on_port(port: int) -> None:
+    """Attempt to free *port* using only cross-platform mechanisms.
+
+    Strategy (no Unix-only tools like fuser/lsof):
+      1. Pure-Python  — use psutil if available (works everywhere).
+      2. Windows      — netstat + taskkill  (built-in since XP).
+      3. Linux/macOS  — /proc/net/tcp6? + kill via os.kill  OR
+                        ss/netstat fallback + os.kill.
+    All paths are wrapped so a failure in one never crashes the caller.
+    """
+    import signal
+    import platform
+
+    pids_to_kill: List[int] = []
+
+    # ── Path 1: psutil (cross-platform, preferred) ────────────────────────
+    try:
+        import psutil  # type: ignore
+        for conn in psutil.net_connections(kind="tcp"):
+            if conn.laddr and conn.laddr.port == port and conn.pid:
+                pids_to_kill.append(conn.pid)
+    except ImportError:
+        pass  # psutil not installed — fall through to OS-specific paths
+    except Exception as exc:
+        print(f"[WARN] psutil port scan failed: {exc}", file=sys.stderr, flush=True)
+
+    # ── Path 2: Windows — netstat + taskkill ─────────────────────────────
+    if not pids_to_kill and platform.system() == "Windows":
+        try:
+            out = subprocess.check_output(
+                ["netstat", "-ano", "-p", "TCP"],
+                stderr=subprocess.DEVNULL,
+            ).decode(errors="replace")
+            for line in out.splitlines():
+                parts = line.split()
+                # e.g.  TCP  0.0.0.0:8000  0.0.0.0:0  LISTENING  1234
+                if len(parts) >= 5 and f":{port}" in parts[1]:
+                    try:
+                        pids_to_kill.append(int(parts[-1]))
+                    except ValueError:
+                        pass
+        except Exception as exc:
+            print(f"[WARN] Windows netstat failed: {exc}", file=sys.stderr, flush=True)
+
+    # ── Path 3: Linux/macOS — ss (iproute2) ──────────────────────────────
+    if not pids_to_kill and platform.system() in ("Linux", "Darwin"):
+        try:
+            # ss -tlnp  (Linux iproute2)
+            out = subprocess.check_output(
+                ["ss", "-tlnp", f"sport = :{port}"],
+                stderr=subprocess.DEVNULL,
+            ).decode(errors="replace")
+            # pid= appears as  users:(("python",pid=1234,fd=5))
+            import re
+            for match in re.finditer(r"pid=(\d+)", out):
+                pids_to_kill.append(int(match.group(1)))
+        except Exception:
+            pass  # ss not available — try netstat -tlnp (macOS / older Linux)
+
+    # ── Path 4: macOS / older Linux — netstat -tlnp ───────────────────────
+    if not pids_to_kill and platform.system() in ("Linux", "Darwin"):
+        try:
+            flag = "-tlnp" if platform.system() == "Linux" else "-anv"
+            out = subprocess.check_output(
+                ["netstat", flag],
+                stderr=subprocess.DEVNULL,
+            ).decode(errors="replace")
+            import re
+            for line in out.splitlines():
+                if f".{port} " in line or f":{port} " in line or f":{port}\t" in line:
+                    # macOS netstat has PID in last column when -v is used
+                    parts = line.split()
+                    for part in reversed(parts):
+                        try:
+                            pids_to_kill.append(int(part))
+                            break
+                        except ValueError:
+                            continue
+        except Exception as exc:
+            print(f"[WARN] netstat fallback failed: {exc}", file=sys.stderr, flush=True)
+
+    # ── Kill collected PIDs ───────────────────────────────────────────────
+    if not pids_to_kill:
+        print(f"[WARN] Could not identify any PID holding port {port}.",
+              file=sys.stderr, flush=True)
+        return
+
+    killed: List[int] = []
+    for pid in set(pids_to_kill):   # deduplicate
+        try:
+            if platform.system() == "Windows":
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            else:
+                os.kill(pid, signal.SIGTERM)
+                time.sleep(0.3)
+                # If still alive, force-kill
+                try:
+                    os.kill(pid, 0)          # check if process still exists
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass                     # already gone after SIGTERM
+            killed.append(pid)
+        except (PermissionError, ProcessLookupError) as exc:
+            print(f"[WARN] Could not kill PID {pid}: {exc}", file=sys.stderr, flush=True)
+        except Exception as exc:
+            print(f"[WARN] Unexpected error killing PID {pid}: {exc}", file=sys.stderr, flush=True)
+
+    if killed:
+        print(f"[INFO] Freed port {port} by terminating PID(s): {killed}",
+              file=sys.stderr, flush=True)
+        time.sleep(1)   # brief pause so the OS releases the port socket
+
+
 def start_container(image_name: str) -> str:
     """Start the Docker container and return its ID."""
     print("[INFO] Starting Docker container...", file=sys.stderr, flush=True)
-    container_id = subprocess.check_output([
-        "docker", "run", "-d", "-p", "8000:8000", image_name
-    ]).decode().strip()
+
+    # ── Guard: port 8000 may already be in use ─────────────────────────────
+    import socket
+    port_in_use = False
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.settimeout(1)
+        probe.connect(("localhost", 8000))
+        probe.close()
+        port_in_use = True
+    except Exception:
+        port_in_use = False
+
+    if port_in_use:
+        print("[WARN] Port 8000 is already in use. Attempting to free it...",
+              file=sys.stderr, flush=True)
+        _kill_process_on_port(8000)
+        # Re-check
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            probe.settimeout(1)
+            probe.connect(("localhost", 8000))
+            probe.close()
+            still_in_use = True
+        except Exception:
+            still_in_use = False
+
+        if still_in_use:
+            raise RuntimeError(
+                "Port 8000 is occupied and could not be freed. "
+                "Stop the conflicting process before running inference."
+            )
+
+    # ── Guard: image name must be non-empty ───────────────────────────────
+    if not image_name or not image_name.strip():
+        raise ValueError("IMAGE_NAME is empty or None; cannot start Docker container.")
+
+    # ── Attempt docker run ─────────────────────────────────────────────────
+    try:
+        container_id = subprocess.check_output(
+            ["docker", "run", "-d", "-p", "8000:8000", image_name],
+            stderr=subprocess.PIPE,
+        ).decode().strip()
+    except subprocess.CalledProcessError as exc:
+        stderr_msg = exc.stderr.decode().strip() if exc.stderr else ""
+        raise RuntimeError(
+            f"'docker run' failed (exit {exc.returncode}): {stderr_msg}"
+        ) from exc
+    except FileNotFoundError:
+        raise RuntimeError(
+            "Docker executable not found. Make sure Docker is installed and on PATH."
+        )
+
+    if not container_id:
+        raise RuntimeError("'docker run' returned an empty container ID.")
+
     print(f"[INFO] Container: {container_id[:12]}", file=sys.stderr, flush=True)
     return container_id
 
@@ -92,23 +273,58 @@ def start_container(image_name: str) -> str:
 def wait_for_server(url: str, retries: int = 30) -> None:
     """Block until /health returns 200 or raise on timeout."""
     print("[INFO] Waiting for server...", file=sys.stderr, flush=True)
+    last_exc: Optional[Exception] = None
     for _ in range(retries):
         try:
             r = httpx.get(f"{url}/health", timeout=2.0)
             if r.status_code == 200:
-                print("[INFO] Server is ready.",file=sys.stderr, flush=True)
+                print("[INFO] Server is ready.", file=sys.stderr, flush=True)
                 return
-        except Exception:
-            pass
+            # Non-200 but server responded — keep waiting
+        except httpx.TransportError as exc:
+            last_exc = exc
+        except Exception as exc:
+            last_exc = exc
         time.sleep(1)
-    raise RuntimeError(f"Server at {url} did not become ready after {retries}s")
+    raise RuntimeError(
+        f"Server at {url} did not become ready after {retries}s. "
+        f"Last error: {last_exc}"
+    )
 
 
 def stop_container(container_id: str) -> None:
     """Stop and remove the Docker container."""
+    if not container_id:
+        print("[WARN] stop_container called with empty container_id; skipping.",
+              file=sys.stderr, flush=True)
+        return
     print("[INFO] Stopping container...", file=sys.stderr, flush=True)
-    subprocess.run(["docker", "stop", container_id], stdout=subprocess.DEVNULL)
-    subprocess.run(["docker", "rm",   container_id], stdout=subprocess.DEVNULL)
+    try:
+        subprocess.run(
+            ["docker", "stop", container_id],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        print("[WARN] 'docker stop' timed out; forcing kill.", file=sys.stderr, flush=True)
+        subprocess.run(
+            ["docker", "kill", container_id],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as exc:
+        print(f"[WARN] 'docker stop' raised: {exc}", file=sys.stderr, flush=True)
+
+    try:
+        subprocess.run(
+            ["docker", "rm", container_id],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+        )
+    except Exception as exc:
+        print(f"[WARN] 'docker rm' raised: {exc}", file=sys.stderr, flush=True)
 
 
 # ── Stdout logging (exact spec format) ────────────────────────────────────────
@@ -253,23 +469,65 @@ def get_llm_action(
             max_tokens=MAX_TOKENS,
             stream=False,
         )
+
+        # Guard: completion or its nested fields may be None
+        if (
+            not completion
+            or not completion.choices
+            or completion.choices[0].message is None
+        ):
+            print("[WARN] LLM returned empty completion; using fallback.", file=sys.stderr, flush=True)
+            return {"action_type": fallback_action, "rationale": "fallback-empty-completion"}
+
         text = (completion.choices[0].message.content or "").strip()
+
+        if not text:
+            print("[WARN] LLM returned empty content; using fallback.", file=sys.stderr, flush=True)
+            return {"action_type": fallback_action, "rationale": "fallback-empty-content"}
 
         # Strip markdown code fences if model wraps response in ```json ... ```
         if text.startswith("```"):
-            text = text.split("```")[1]
+            parts = text.split("```")
+            # parts[1] is the content inside the fences
+            text = parts[1] if len(parts) > 1 else text
             if text.startswith("json"):
                 text = text[4:]
             text = text.strip()
 
-        parsed = json.loads(text)
+        # Guard: text may still not be valid JSON after stripping
+        if not text:
+            print("[WARN] LLM text empty after fence-strip; using fallback.", file=sys.stderr, flush=True)
+            return {"action_type": fallback_action, "rationale": "fallback-empty-after-strip"}
+
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as jexc:
+            print(f"[WARN] JSON parse failed ({jexc}); raw text: {text!r}; using fallback.",
+                  file=sys.stderr, flush=True)
+            return {"action_type": fallback_action, "rationale": "fallback-json-error"}
+
+        # Guard: parsed must be a dict
+        if not isinstance(parsed, dict):
+            print(f"[WARN] LLM JSON is not a dict ({type(parsed).__name__}); using fallback.",
+                  file=sys.stderr, flush=True)
+            return {"action_type": fallback_action, "rationale": "fallback-not-dict"}
+
+        action_type = parsed.get("action", fallback_action)
+        rationale   = parsed.get("reasoning", "")
+
+        # Guard: action_type must be a non-empty string
+        if not isinstance(action_type, str) or not action_type.strip():
+            action_type = fallback_action
+        if not isinstance(rationale, str):
+            rationale = str(rationale)
+
         return {
-            "action_type": parsed.get("action", fallback_action),
-            "rationale":   parsed.get("reasoning", ""),
+            "action_type": action_type,
+            "rationale":   rationale,
         }
 
     except Exception as exc:
-        print(f"[DEBUG] LLM request failed: {exc}",  file=sys.stderr, flush=True)
+        print(f"[DEBUG] LLM request failed: {exc}", file=sys.stderr, flush=True)
         return {"action_type": fallback_action, "rationale": "fallback"}
 
 
@@ -298,45 +556,106 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
     try:
         # MicrofinanceEnv is an EnvClient — use .sync() context manager
         with MicrofinanceEnv(base_url=SERVER_URL).sync() as env:
-            result = env.reset()
-            obs    = result.observation    # ApplicantObservation (Phase 1 start)
-            done   = result.done
+            # Guard: env.reset() may raise or return None
+            try:
+                result = env.reset()
+            except Exception as exc:
+                print(f"[DEBUG] env.reset() failed: {exc}", file=sys.stderr, flush=True)
+                raise
+
+            if result is None:
+                raise RuntimeError("env.reset() returned None; cannot proceed.")
+
+            obs  = result.observation    # ApplicantObservation (Phase 1 start)
+            done = result.done
+
+            if obs is None:
+                raise RuntimeError("env.reset() returned result with None observation.")
 
             for step in range(1, max_steps + 1):
                 if done:
                     break
 
+                # Guard: LLM call is already wrapped internally; always returns a dict
                 action_dict = get_llm_action(llm_client, obs, step)
-                action_type = action_dict["action_type"]
-                rationale   = action_dict["rationale"]
+                action_type = action_dict.get("action_type", "APPROVE")
+                rationale   = action_dict.get("rationale", "")
+
+                # Guard: ensure action_type and rationale are plain strings
+                if not isinstance(action_type, str) or not action_type.strip():
+                    action_type = (
+                        "APPROVE" if isinstance(obs, ApplicantObservation) else "DO_NOTHING"
+                    )
+                if not isinstance(rationale, str):
+                    rationale = str(rationale)
 
                 # CreditAction field names confirmed from models.py:
                 #   action_type: ActionType  (the action string)
                 #   rationale:   str         (the reasoning)
-                result = env.step(CreditAction(
-                    action_type=action_type,
-                    rationale=rationale,
-                ))
+                try:
+                    result = env.step(CreditAction(
+                        action_type=action_type,
+                        rationale=rationale,
+                    ))
+                except Exception as exc:
+                    print(f"[DEBUG] env.step() failed at step {step}: {exc}",
+                          file=sys.stderr, flush=True)
+                    raise
+
+                if result is None:
+                    print(f"[WARN] env.step() returned None at step {step}; ending episode.",
+                          file=sys.stderr, flush=True)
+                    break
 
                 obs    = result.observation   # may switch to MonitoringObservation in Phase 2
                 reward = result.reward
                 done   = result.done
 
+                # Guard: reward must be a finite float
+                try:
+                    reward = float(reward)
+                    if not (reward == reward):   # NaN check
+                        reward = 0.0
+                except (TypeError, ValueError):
+                    reward = 0.0
+
+                # Guard: done must be a bool
+                if not isinstance(done, bool):
+                    done = bool(done)
+
                 # last_action_result is a field on the Pydantic obs, not an error key
                 # We only surface it when it looks like an error (non-empty, non-success text)
-                last_result = getattr(obs, "last_action_result", "") or ""
+                last_result = ""
+                if obs is not None:
+                    try:
+                        last_result = getattr(obs, "last_action_result", "") or ""
+                    except Exception:
+                        last_result = ""
                 error = last_result if last_result else None
 
                 rewards.append(reward)
                 steps_taken = step
 
-                action_str = json.dumps(
-                    {"action": action_type, "reasoning": rationale},
-                    ensure_ascii=False,
-                )
+                try:
+                    action_str = json.dumps(
+                        {"action": action_type, "reasoning": rationale},
+                        ensure_ascii=False,
+                    )
+                except (TypeError, ValueError):
+                    action_str = json.dumps(
+                        {"action": str(action_type), "reasoning": str(rationale)},
+                        ensure_ascii=False,
+                    )
+
                 log_step(step=step, action=action_str, reward=reward, done=done, error=error)
 
                 if done:
+                    break
+
+                # Guard: if obs is None after a step, we cannot continue
+                if obs is None:
+                    print(f"[WARN] obs is None after step {step}; ending episode.",
+                          file=sys.stderr, flush=True)
                     break
 
         # Normalise terminal reward from approx [-3.0, 2.5] -> [0.0, 1.0]
@@ -366,23 +685,51 @@ def main() -> None:
         print("[ERROR] IMAGE_NAME environment variable not set.", flush=True)
         sys.exit(1)
 
-    llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    # Guard: validate API_BASE_URL is a non-empty string
+    if not API_BASE_URL or not API_BASE_URL.strip():
+        print("[ERROR] API_BASE_URL is empty or not set.", flush=True)
+        sys.exit(1)
 
-    print(f"[INFO] Model  : {MODEL_NAME}",file=sys.stderr, flush=True)
-    print(f"[INFO] Image  : {IMAGE_NAME}",file=sys.stderr, flush=True)
-    print(f"[INFO] Server : {SERVER_URL}", file=sys.stderr,flush=True)
-    print(f"[INFO] Tasks  : {[t['name'] for t in TASKS]}",file=sys.stderr, flush=True)
-    print("",file=sys.stderr, flush=True)
+    # Guard: initialise OpenAI client safely
+    try:
+        llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    except Exception as exc:
+        print(f"[ERROR] Failed to initialise OpenAI client: {exc}", flush=True)
+        sys.exit(1)
 
-    container_id = start_container(IMAGE_NAME)
+    print(f"[INFO] Model  : {MODEL_NAME}", file=sys.stderr, flush=True)
+    print(f"[INFO] Image  : {IMAGE_NAME}", file=sys.stderr, flush=True)
+    print(f"[INFO] Server : {SERVER_URL}", file=sys.stderr, flush=True)
+    print(f"[INFO] Tasks  : {[t['name'] for t in TASKS]}", file=sys.stderr, flush=True)
+    print("", file=sys.stderr, flush=True)
+
+    # Guard: start_container may raise — catch and exit cleanly
+    container_id = ""
+    try:
+        container_id = start_container(IMAGE_NAME)
+    except Exception as exc:
+        print(f"[ERROR] Could not start Docker container: {exc}", flush=True)
+        sys.exit(1)
 
     try:
-        wait_for_server(SERVER_URL)
+        # Guard: wait_for_server may raise — let it propagate so finally still cleans up
+        try:
+            wait_for_server(SERVER_URL)
+        except RuntimeError as exc:
+            print(f"[ERROR] Server never became ready: {exc}", flush=True)
+            # Still run tasks loop so log_end is always emitted; tasks will fail gracefully
+            # (env connections will raise and be caught inside run_task)
 
         scores = {}
         for task in TASKS:
-            scores[task["name"]] = run_task(task, llm_client)
-            print("",file=sys.stderr, flush=True)
+            try:
+                scores[task["name"]] = run_task(task, llm_client)
+            except Exception as exc:
+                # Individual task crash must not abort other tasks
+                print(f"[DEBUG] Unhandled error in task '{task['name']}': {exc}",
+                      file=sys.stderr, flush=True)
+                scores[task["name"]] = 0.0
+            print("", file=sys.stderr, flush=True)
 
     finally:
         # Always stop the container, even if a task crashes
