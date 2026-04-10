@@ -760,6 +760,19 @@
 
     async function resetEnv() {
         try {
+            // ── 1. Tell the server which task difficulty to use ─────────────
+            const taskName = document.getElementById('taskSelect').value;
+            const setTaskRes = await fetch(`${API}/set_task`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ task_name: taskName })
+            });
+            if (!setTaskRes.ok) {
+                const errText = await setTaskRes.text();
+                throw new Error(`set_task failed: ${errText}`);
+            }
+
+            // ── 2. Reset the environment (now using the correct task) ────────
             const res = await fetch(`${API}/reset`, { method: 'POST' });
             if (!res.ok) throw new Error(`Reset failed: ${res.status}`);
             const data = await res.json();
@@ -780,7 +793,7 @@
 
             updatePhaseIndicator('APPLICATION');
             updateObservation(data);
-            addLog('RESET', 'Episode started', 0);
+            addLog('RESET', `Episode started [${taskName}]`, 0);
         } catch (e) {
             alert('Error: ' + e.message + '\n\nMake sure the server is running on port 8000.');
         }

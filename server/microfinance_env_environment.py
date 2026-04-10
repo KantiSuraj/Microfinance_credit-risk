@@ -142,6 +142,18 @@ class MicrofinanceEnvironment(Environment):
         self._profile : Optional[ApplicantProfile]  = None
         self._state   : Optional[MicrofinanceState] = None
 
+    def set_task(self, task_name: str) -> None:
+        """
+        Switch the active task configuration at runtime.
+        Must be called BEFORE reset() so the next episode uses the new difficulty.
+        Raises ValueError for unknown task names.
+        """
+        if task_name not in TASK_CONFIGS:
+            raise ValueError(
+                f"Unknown task '{task_name}'. Valid tasks: {list(TASK_CONFIGS.keys())}"
+            )
+        self._task_config = TASK_CONFIGS[task_name]
+
     def reset(self) -> ApplicantObservation:
         tc = self._task_config
 

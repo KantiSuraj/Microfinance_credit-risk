@@ -470,45 +470,50 @@ def get_llm_action(
             stream=False,
         )
 
-        # Guard: completion or its nested fields may be None
+        # Guard: completion object, choices list, or message may be None/empty
         if (
             not completion
-            or not completion.choices
-            or completion.choices[0].message is None
+            or not getattr(completion, "choices", None)
+            or completion.choices[0] is None
+            or getattr(completion.choices[0], "message", None) is None
         ):
-            print("[WARN] LLM returned empty completion; using fallback.", file=sys.stderr, flush=True)
+            print("[WARN] LLM returned empty/malformed completion; using fallback.",
+                  file=sys.stderr, flush=True)
             return {"action_type": fallback_action, "rationale": "fallback-empty-completion"}
 
         text = (completion.choices[0].message.content or "").strip()
 
+        # Guard: empty content string
         if not text:
-            print("[WARN] LLM returned empty content; using fallback.", file=sys.stderr, flush=True)
+            print("[WARN] LLM returned empty content string; using fallback.",
+                  file=sys.stderr, flush=True)
             return {"action_type": fallback_action, "rationale": "fallback-empty-content"}
 
         # Strip markdown code fences if model wraps response in ```json ... ```
         if text.startswith("```"):
             parts = text.split("```")
-            # parts[1] is the content inside the fences
-            text = parts[1] if len(parts) > 1 else text
+            text = parts[1] if len(parts) > 1 else ""
             if text.startswith("json"):
                 text = text[4:]
             text = text.strip()
 
-        # Guard: text may still not be valid JSON after stripping
+        # Guard: text empty after fence-stripping
         if not text:
-            print("[WARN] LLM text empty after fence-strip; using fallback.", file=sys.stderr, flush=True)
+            print("[WARN] LLM text empty after fence-strip; using fallback.",
+                  file=sys.stderr, flush=True)
             return {"action_type": fallback_action, "rationale": "fallback-empty-after-strip"}
 
+        # Guard: JSON parse may fail
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError as jexc:
-            print(f"[WARN] JSON parse failed ({jexc}); raw text: {text!r}; using fallback.",
+            print(f"[WARN] JSON parse failed ({jexc}); raw={text!r}; using fallback.",
                   file=sys.stderr, flush=True)
             return {"action_type": fallback_action, "rationale": "fallback-json-error"}
 
-        # Guard: parsed must be a dict
+        # Guard: parsed must be a dict to safely call .get()
         if not isinstance(parsed, dict):
-            print(f"[WARN] LLM JSON is not a dict ({type(parsed).__name__}); using fallback.",
+            print(f"[WARN] LLM JSON not a dict ({type(parsed).__name__}); using fallback.",
                   file=sys.stderr, flush=True)
             return {"action_type": fallback_action, "rationale": "fallback-not-dict"}
 
@@ -518,6 +523,7 @@ def get_llm_action(
         # Guard: action_type must be a non-empty string
         if not isinstance(action_type, str) or not action_type.strip():
             action_type = fallback_action
+        # Guard: rationale must be a string
         if not isinstance(rationale, str):
             rationale = str(rationale)
 
@@ -527,7 +533,7 @@ def get_llm_action(
         }
 
     except Exception as exc:
-        print(f"[DEBUG] LLM request failed: {exc}", file=sys.stderr, flush=True)
+        print(f"[DEBUG] LLM request failed: {exc}",  file=sys.stderr, flush=True)
         return {"action_type": fallback_action, "rationale": "fallback"}
 
 
@@ -556,6 +562,27 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
     try:
         # MicrofinanceEnv is an EnvClient — use .sync() context manager
         with MicrofinanceEnv(base_url=SERVER_URL).sync() as env:
+
+            # ── Switch the server to the correct task difficulty ────────────
+            # Without this, the server stays locked on whatever task it was
+            # initialised with (default: basic_lending), meaning all 3 tasks
+            # would evaluate the same configuration.
+            try:
+                switch_resp = httpx.post(
+                    f"{SERVER_URL}/set_task",
+                    json={"task_name": task_name},
+                    timeout=10.0,
+                )
+                if switch_resp.status_code != 200:
+                    print(
+                        f"[WARN] /set_task returned {switch_resp.status_code}: {switch_resp.text}",
+                        file=sys.stderr, flush=True,
+                    )
+                else:
+                    print(f"[INFO] Task set to '{task_name}'.", file=sys.stderr, flush=True)
+            except Exception as exc:
+                print(f"[WARN] /set_task request failed: {exc}", file=sys.stderr, flush=True)
+
             # Guard: env.reset() may raise or return None
             try:
                 result = env.reset()
@@ -636,18 +663,18 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                 rewards.append(reward)
                 steps_taken = step
 
+                # Serialise action to JSON string for the log line (spec requires JSON)
                 try:
-                    action_str = json.dumps(
+                    action_log_str = json.dumps(
                         {"action": action_type, "reasoning": rationale},
                         ensure_ascii=False,
                     )
                 except (TypeError, ValueError):
-                    action_str = json.dumps(
+                    action_log_str = json.dumps(
                         {"action": str(action_type), "reasoning": str(rationale)},
                         ensure_ascii=False,
                     )
-
-                log_step(step=step, action=action_str, reward=reward, done=done, error=error)
+                log_step(step=step, action=action_log_str, reward=reward, done=done, error=error)
 
                 if done:
                     break
@@ -658,10 +685,140 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                           file=sys.stderr, flush=True)
                     break
 
-        # Normalise terminal reward from approx [-3.0, 2.5] -> [0.0, 1.0]
-        if rewards:
-            score = (rewards[-1] + 3.0) / 5.5
-            score = min(max(score, 0.0), 1.0)
+        # ── Score via grader (authoritative) ──────────────────────────────────
+        # The grader evaluates the full trajectory. To build the episode_log it
+        # needs, we fetch the complete hidden state from /state after the
+        # episode ends, then feed it to grade_trajectory().
+        try:
+            state_resp = httpx.get(f"{SERVER_URL}/state", timeout=10.0)
+            if state_resp.status_code == 200:
+                # Guard: response body may not be valid JSON (e.g. HTML error page)
+                try:
+                    state_data = state_resp.json()
+                except Exception as jexc:
+                    print(f"[WARN] /state body not valid JSON ({jexc}); using reward fallback.",
+                          file=sys.stderr, flush=True)
+                    if rewards:
+                        score = (rewards[-1] + 3.0) / 5.5
+                        score = min(max(score, 0.0), 1.0)
+                    state_data = None
+
+                # Guard: state_data must be a dict to call .get()
+                if state_data is not None and not isinstance(state_data, dict):
+                    print(f"[WARN] /state JSON is not a dict ({type(state_data).__name__}); using reward fallback.",
+                          file=sys.stderr, flush=True)
+                    if rewards:
+                        score = (rewards[-1] + 3.0) / 5.5
+                        score = min(max(score, 0.0), 1.0)
+                    state_data = None
+
+                if state_data is not None:
+                    # Determine phase1 decision and phase2 progression from state
+                    phase1_decision = "REJECT"   # default if never approved
+                    reached_phase2 = False
+
+                    # Derive from state fields: if phase1_reward and signal_quality
+                    # are set, the agent approved and entered Phase 2
+                    reached_phase2 = state_data.get("phase1_reward") is not None and \
+                                     state_data.get("signal_quality") is not None
+                    if reached_phase2:
+                        phase1_decision = "APPROVE"
+
+                    # Determine terminal outcome from terminal message or state
+                    terminal_outcome = "TIMEOUT"
+                    last_msg = ""
+                    if obs is not None:
+                        # Guard: getattr may raise on a broken obs object
+                        try:
+                            last_msg = getattr(obs, "last_action_result", "") or ""
+                        except Exception:
+                            last_msg = ""
+                    if "fully repaid" in last_msg.lower() or "repaid" in last_msg.lower():
+                        terminal_outcome = "REPAID"
+                    elif "default" in last_msg.lower():
+                        terminal_outcome = "DEFAULT"
+                    elif "escalat" in last_msg.lower():
+                        terminal_outcome = "ESCALATED"
+                    elif "auto-rejected" in last_msg.lower() or "timeout" in last_msg.lower():
+                        terminal_outcome = "TIMEOUT"
+                    elif not reached_phase2:
+                        terminal_outcome = "REJECTED"
+
+                    # Build docs_collected
+                    docs_collected = []
+                    if state_data.get("income_revealed"):
+                        docs_collected.append("income_proof")
+                    if state_data.get("credit_history_revealed"):
+                        docs_collected.append("credit_history")
+                    if state_data.get("senior_review_done"):
+                        docs_collected.append("senior_review")
+
+                    # Derive borderline/conflicting from task config
+                    is_borderline = task_name == "adversarial_portfolio"
+                    has_conflicting = task_name == "noisy_signals"
+
+                    episode_log = {
+                        "phase1_decision":         phase1_decision,
+                        "ground_truth":            state_data.get("ground_truth_label", "REJECT"),
+                        "default_prob":            state_data.get("true_default_probability", 0.5),
+                        "phase1_steps":            state_data.get("step_count", steps_taken),
+                        "docs_collected":          docs_collected,
+                        "phase1_reward":           state_data.get("phase1_reward", -1.5),
+                        "reached_phase2":          reached_phase2,
+                        "terminal_outcome":        terminal_outcome,
+                        "terminal_reward":         state_data.get("terminal_reward", rewards[-1] if rewards else 0.0),
+                        "payment_history":         state_data.get("payment_history", []),
+                        "intervention_history":    state_data.get("intervention_history", []),
+                        "signal_quality":          state_data.get("signal_quality"),
+                        "is_borderline":           is_borderline,
+                        "has_conflicting_signal":  has_conflicting,
+                    }
+
+                    from server.grader import grade_trajectory
+                    grade = grade_trajectory(episode_log)
+
+                    # Guard: grade.score may be None, NaN, or non-numeric
+                    try:
+                        score = float(grade.score)
+                        if score != score:   # NaN check
+                            raise ValueError("grade.score is NaN")
+                    except (TypeError, ValueError, AttributeError) as gexc:
+                        print(f"[WARN] grade.score invalid ({gexc}); using reward fallback.",
+                              file=sys.stderr, flush=True)
+                        if rewards:
+                            score = (rewards[-1] + 3.0) / 5.5
+                            score = min(max(score, 0.0), 1.0)
+
+                    # Guard: sub-score attributes may be missing or non-numeric
+                    try:
+                        p1   = float(getattr(grade, "phase1_score",    0.0) or 0.0)
+                        p2   = float(getattr(grade, "phase2_score",    0.0) or 0.0)
+                        tim  = float(getattr(grade, "timing_score",    0.0) or 0.0)
+                        info = float(getattr(grade, "info_flow_score", 0.0) or 0.0)
+                        suff = float(getattr(grade, "info_sufficiency", 0.0) or 0.0)
+                        print(
+                            f"[INFO] Grader score={score:.4f} "
+                            f"(p1={p1:.3f} p2={p2:.3f} "
+                            f"timing={tim:.3f} info={info:.3f} "
+                            f"suff={suff:.3f})",
+                            file=sys.stderr, flush=True,
+                        )
+                    except Exception as pexc:
+                        print(f"[INFO] Grader score={score:.4f} (sub-scores unavailable: {pexc})",
+                              file=sys.stderr, flush=True)
+            else:
+                # /state not available — fall back to reward normalisation
+                print(f"[WARN] /state returned {state_resp.status_code}; using reward fallback.",
+                      file=sys.stderr, flush=True)
+                if rewards:
+                    score = (rewards[-1] + 3.0) / 5.5
+                    score = min(max(score, 0.0), 1.0)
+        except Exception as exc:
+            print(f"[WARN] Grader scoring failed ({exc}); using reward fallback.",
+                  file=sys.stderr, flush=True)
+            if rewards:
+                score = (rewards[-1] + 3.0) / 5.5
+                score = min(max(score, 0.0), 1.0)
 
         success = score >= SUCCESS_THRESHOLD
 

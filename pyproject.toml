@@ -30,7 +30,7 @@ dev = [
 ]
 
 [project.scripts]
-server = "microfinance.server:main"
+server = "server.app:main"
 
 [build-system]
 requires = ["hatchling"]

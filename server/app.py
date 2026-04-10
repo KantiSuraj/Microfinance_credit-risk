@@ -22,10 +22,12 @@ import os
 #sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 
 from openenv.core.env_server import create_fastapi_app
+from fastapi import HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from models import CreditAction, ApplicantObservation
-from server.microfinance_env_environment import MicrofinanceEnvironment
+from server.microfinance_env_environment import MicrofinanceEnvironment, TASK_CONFIGS
 
 # ── Instantiate environment ────────────────────────────────────────────────
 # DATASET_SIZE, SEED, and TASK_NAME are read from env vars so the Dockerfile
@@ -52,18 +54,44 @@ _static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 if os.path.exists(_static_dir):
     app.mount("/static", StaticFiles(directory=_static_dir), name="static")
-
-    @app.get("/", include_in_schema=False)
-    async def root():
-        return FileResponse(os.path.join(_static_dir, "index.html"))
 else:
     print(f"[WARNING] Static directory not found: {_static_dir}")
 
-    @app.get("/", include_in_schema=False)
-    async def root():
-        return {"error": "Static UI not found. Check /server/static folder."}
+
+# ── /set_task — dynamically switch task difficulty without restarting ──────
+class SetTaskRequest(BaseModel):
+    task_name: str
+
+@app.post("/set_task", include_in_schema=True, tags=["environment"])
+async def set_task(req: SetTaskRequest):
+    """
+    Switch the active task configuration (basic_lending / noisy_signals /
+    adversarial_portfolio) at runtime.  Must be called BEFORE /reset so the
+    next episode uses the requested difficulty.
+    """
+    if req.task_name not in TASK_CONFIGS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown task '{req.task_name}'. Valid tasks: {list(TASK_CONFIGS.keys())}"
+        )
+    _env_instance.set_task(req.task_name)
+    return {"status": "ok", "active_task": req.task_name}
 
 
+# ── Serve dashboard UI ─────────────────────────────────────────────────────
+@app.get("/", include_in_schema=False)
+async def root():
+    index_path = os.path.join(_static_dir, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return {"error": "Static UI not found. Check /server/static folder."}
+
+
+
+
+@app.get("/web", include_in_schema=False)
+async def web():
+    return await root()
 
 
 # ── Entry point for OpenEnv runner ─────────────────────────────────
@@ -77,22 +105,5 @@ def main():
     )
 
 
-from fastapi.responses import HTMLResponse
-
-@app.get("/", response_class=HTMLResponse, include_in_schema=False)
-async def root_override():
-    index_path = os.path.join(_static_dir, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
-    return "<h1>UI not found</h1>"
-
-
-@app.get("/web", include_in_schema=False)
-async def web():
-    return await root_override()
-
-
 if __name__ == "__main__":
-    main()
-
-    
+    main()
