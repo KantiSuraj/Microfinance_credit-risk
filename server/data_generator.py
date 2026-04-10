@@ -146,6 +146,7 @@ def generate_applicant(
     rng: Optional[random.Random] = None,
     force_conflict: bool = False,
     force_borderline: bool = False,
+    force_adversarial: bool = False,
 ) -> ApplicantProfile:
     """
     Generate one synthetic applicant with optional trait forcing.
@@ -224,6 +225,28 @@ def generate_applicant(
         past_defaults = 1
         repayment_streak = rng.randint(10, 16)
 
+    # ── Inject adversarial case (genuinely APPROVE-worthy but risky) ──────
+    # Designed to naturally score APPROVE through _score_applicant while
+    # remaining challenging in Phase 2 due to elevated_base_risk and
+    # signal_quality_cap in the task config.
+    if force_adversarial:
+        is_borderline = True
+        has_conflict = True
+        # Stable job + decent income → low base score
+        occupation = rng.choice(STABLE_JOBS)
+        stability = "stable"
+        income = rng.uniform(25_000, 45_000)  # moderate-high
+        # Low LTI → manageable debt
+        loan_ask = income * rng.uniform(1.8, 2.5)
+        # Manageable dependents
+        dependents = rng.randint(1, 3)
+        # One old default but strong recovery streak → net positive signal
+        previous_loans = rng.randint(3, 5)
+        past_defaults = 1
+        repayment_streak = rng.randint(12, 24)
+        # Rural region gets a slight score reduction (easier approve)
+        region = "rural"
+
     # ── Ground truth scoring ──────────────────────────────────────────────
     default_prob, risk_band = _score_applicant(
         income, loan_ask, dependents, stability,
@@ -263,23 +286,27 @@ def generate_dataset(
     seed: int = 42,
     conflict_ratio: float = 0.20,
     borderline_ratio: float = 0.18,
+    adversarial_count: int = 0,
 ) -> list[ApplicantProfile]:
     """
     Generate a fixed dataset. Guarantees a minimum proportion of
     conflicting and borderline cases regardless of random draws.
+    adversarial_count specifies how many force_adversarial profiles to include.
     """
     rng      = random.Random(seed)
     profiles = []
 
     n_conflict    = int(n * conflict_ratio)
     n_borderline  = int(n * borderline_ratio)
-    n_rest        = n - n_conflict - n_borderline
+    n_rest        = n - n_conflict - n_borderline - adversarial_count
 
     for _ in range(n_conflict):
         profiles.append(generate_applicant(rng, force_conflict=True))
     for _ in range(n_borderline):
         profiles.append(generate_applicant(rng, force_borderline=True))
-    for _ in range(n_rest):
+    for _ in range(adversarial_count):
+        profiles.append(generate_applicant(rng, force_adversarial=True))
+    for _ in range(max(0, n_rest)):
         profiles.append(generate_applicant(rng))
 
     rng.shuffle(profiles)

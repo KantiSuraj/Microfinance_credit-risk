@@ -54,6 +54,7 @@ class TaskConfig:
     pre_reveal_credit: bool = False       # credit history visible from start
     force_conflicting: bool = False       # force conflicting-signal applicants
     force_borderline: bool = False        # force borderline applicants
+    force_adversarial: bool = False        # force adversarial (APPROVE-worthy but risky)
     force_clear_case: bool = False        # force unambiguous applicants
     extra_doc_penalty: float = 0.0        # additional penalty for wrong doc requests
     # Phase 2 configuration
@@ -102,11 +103,11 @@ TASK_CONFIGS = {
             "elevated default risk, capped signal quality, recovery only possible "
             "with precisely timed interventions."
         ),
-        force_borderline=True,        # borderline applicant
+        force_adversarial=True,           # genuinely APPROVE-worthy but risky
         phase2_months=12,
-        elevated_base_risk=0.12,      # +12% base default probability
-        signal_quality_cap=0.75,      # noisy observations regardless of docs
-        default_threshold=3,          # tighter failure threshold
+        elevated_base_risk=0.12,          # +12% base default probability
+        signal_quality_cap=0.75,          # noisy observations regardless of docs
+        default_threshold=3,              # tighter failure threshold
         seed=256,
     ),
 }
@@ -137,7 +138,11 @@ class MicrofinanceEnvironment(Environment):
         tc = self._task_config
         # Use caller's seed if explicitly provided, otherwise fall back to task config
         effective_seed = seed if seed != 42 else tc.seed
-        self._dataset = generate_dataset(n=dataset_size, seed=effective_seed)
+        adversarial_count = 30 if tc.force_adversarial else 0
+        self._dataset = generate_dataset(
+            n=dataset_size, seed=effective_seed,
+            adversarial_count=adversarial_count,
+        )
         self._rng     = random.Random(effective_seed)
         self._profile : Optional[ApplicantProfile]  = None
         self._state   : Optional[MicrofinanceState] = None
@@ -147,12 +152,21 @@ class MicrofinanceEnvironment(Environment):
         Switch the active task configuration at runtime.
         Must be called BEFORE reset() so the next episode uses the new difficulty.
         Raises ValueError for unknown task names.
+        Regenerates the dataset with the new task's seed and structural requirements.
         """
         if task_name not in TASK_CONFIGS:
             raise ValueError(
                 f"Unknown task '{task_name}'. Valid tasks: {list(TASK_CONFIGS.keys())}"
             )
         self._task_config = TASK_CONFIGS[task_name]
+        tc = self._task_config
+        # Regenerate dataset with the task's seed and adversarial requirements
+        adversarial_count = 30 if tc.force_adversarial else 0
+        self._dataset = generate_dataset(
+            n=len(self._dataset), seed=tc.seed,
+            adversarial_count=adversarial_count,
+        )
+        self._rng = random.Random(tc.seed)
 
     def reset(self) -> ApplicantObservation:
         tc = self._task_config
@@ -167,6 +181,16 @@ class MicrofinanceEnvironment(Environment):
         elif tc.force_conflicting:
             # Medium: pick a conflicting-signal applicant
             candidates = [p for p in self._dataset if p.has_conflicting_signal]
+            self._profile = self._rng.choice(candidates) if candidates else self._rng.choice(self._dataset)
+        elif tc.force_adversarial:
+            # Hard: pick an adversarial applicant that genuinely scores APPROVE
+            candidates = [p for p in self._dataset
+                          if p.is_borderline and p.ground_truth_label == "APPROVE"]
+            if not candidates:
+                # Fallback: any APPROVE-worthy borderline profile
+                candidates = [p for p in self._dataset
+                              if p.ground_truth_label == "APPROVE" and
+                              abs(p.true_default_probability - 0.5) < 0.20]
             self._profile = self._rng.choice(candidates) if candidates else self._rng.choice(self._dataset)
         elif tc.force_borderline:
             # Hard: pick a borderline applicant
