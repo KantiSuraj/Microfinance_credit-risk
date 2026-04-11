@@ -78,176 +78,30 @@ TASKS = [
 # ── Docker management ──────────────────────────────────────────────────────────
 # MicrofinanceEnv extends EnvClient (HTTP-only). There is no from_docker_image().
 # Docker must be managed manually here.
-
-def _find_free_port() -> int:
-    """Find a free TCP port on localhost to avoid bind conflicts.
-    Pure-Python / cross-platform (Windows, macOS, Linux).
-    """
-    import socket
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return s.getsockname()[1]
-
-
-def _kill_process_on_port(port: int) -> None:
-    """Attempt to free *port* using only cross-platform mechanisms.
-
-    Strategy (no Unix-only tools like fuser/lsof):
-      1. Pure-Python  — use psutil if available (works everywhere).
-      2. Windows      — netstat + taskkill  (built-in since XP).
-      3. Linux/macOS  — /proc/net/tcp6? + kill via os.kill  OR
-                        ss/netstat fallback + os.kill.
-    All paths are wrapped so a failure in one never crashes the caller.
-    """
-    import signal
-    import platform
-
-    pids_to_kill: List[int] = []
-
-    # ── Path 1: psutil (cross-platform, preferred) ────────────────────────
-    try:
-        import psutil  # type: ignore
-        for conn in psutil.net_connections(kind="tcp"):
-            if conn.laddr and conn.laddr.port == port and conn.pid:
-                pids_to_kill.append(conn.pid)
-    except ImportError:
-        pass  # psutil not installed — fall through to OS-specific paths
-    except Exception as exc:
-        print(f"[WARN] psutil port scan failed: {exc}", file=sys.stderr, flush=True)
-
-    # ── Path 2: Windows — netstat + taskkill ─────────────────────────────
-    if not pids_to_kill and platform.system() == "Windows":
-        try:
-            out = subprocess.check_output(
-                ["netstat", "-ano", "-p", "TCP"],
-                stderr=subprocess.DEVNULL,
-            ).decode(errors="replace")
-            for line in out.splitlines():
-                parts = line.split()
-                # e.g.  TCP  0.0.0.0:8000  0.0.0.0:0  LISTENING  1234
-                if len(parts) >= 5 and f":{port}" in parts[1]:
-                    try:
-                        pids_to_kill.append(int(parts[-1]))
-                    except ValueError:
-                        pass
-        except Exception as exc:
-            print(f"[WARN] Windows netstat failed: {exc}", file=sys.stderr, flush=True)
-
-    # ── Path 3: Linux/macOS — ss (iproute2) ──────────────────────────────
-    if not pids_to_kill and platform.system() in ("Linux", "Darwin"):
-        try:
-            # ss -tlnp  (Linux iproute2)
-            out = subprocess.check_output(
-                ["ss", "-tlnp", f"sport = :{port}"],
-                stderr=subprocess.DEVNULL,
-            ).decode(errors="replace")
-            # pid= appears as  users:(("python",pid=1234,fd=5))
-            import re
-            for match in re.finditer(r"pid=(\d+)", out):
-                pids_to_kill.append(int(match.group(1)))
-        except Exception:
-            pass  # ss not available — try netstat -tlnp (macOS / older Linux)
-
-    # ── Path 4: macOS / older Linux — netstat -tlnp ───────────────────────
-    if not pids_to_kill and platform.system() in ("Linux", "Darwin"):
-        try:
-            flag = "-tlnp" if platform.system() == "Linux" else "-anv"
-            out = subprocess.check_output(
-                ["netstat", flag],
-                stderr=subprocess.DEVNULL,
-            ).decode(errors="replace")
-            import re
-            for line in out.splitlines():
-                if f".{port} " in line or f":{port} " in line or f":{port}\t" in line:
-                    # macOS netstat has PID in last column when -v is used
-                    parts = line.split()
-                    for part in reversed(parts):
-                        try:
-                            pids_to_kill.append(int(part))
-                            break
-                        except ValueError:
-                            continue
-        except Exception as exc:
-            print(f"[WARN] netstat fallback failed: {exc}", file=sys.stderr, flush=True)
-
-    # ── Kill collected PIDs ───────────────────────────────────────────────
-    if not pids_to_kill:
-        print(f"[WARN] Could not identify any PID holding port {port}.",
-              file=sys.stderr, flush=True)
-        return
-
-    killed: List[int] = []
-    for pid in set(pids_to_kill):   # deduplicate
-        try:
-            if platform.system() == "Windows":
-                subprocess.run(
-                    ["taskkill", "/F", "/PID", str(pid)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            else:
-                os.kill(pid, signal.SIGTERM)
-                time.sleep(0.3)
-                # If still alive, force-kill
-                try:
-                    os.kill(pid, 0)          # check if process still exists
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass                     # already gone after SIGTERM
-            killed.append(pid)
-        except (PermissionError, ProcessLookupError) as exc:
-            print(f"[WARN] Could not kill PID {pid}: {exc}", file=sys.stderr, flush=True)
-        except Exception as exc:
-            print(f"[WARN] Unexpected error killing PID {pid}: {exc}", file=sys.stderr, flush=True)
-
-    if killed:
-        print(f"[INFO] Freed port {port} by terminating PID(s): {killed}",
-              file=sys.stderr, flush=True)
-        time.sleep(1)   # brief pause so the OS releases the port socket
+#
+# Change 1: _find_free_port and _kill_process_on_port removed entirely.
+# They introduced subprocess calls to OS binaries (netstat, ss, fuser, lsof,
+# taskkill) that are not present in the minimal Linux evaluator container.
+# The evaluator manages the Docker container externally; port management
+# is not our responsibility and must not crash the script.
 
 
 def start_container(image_name: str) -> str:
-    """Start the Docker container and return its ID."""
+    """Start the Docker container and return its ID.
+
+    Change 2: All hard raises replaced with warn-and-return-empty so the
+    script degrades gracefully when Docker is unavailable or already managed
+    externally by the evaluator.
+    """
     print("[INFO] Starting Docker container...", file=sys.stderr, flush=True)
 
-    # ── Guard: port 8000 may already be in use ─────────────────────────────
-    import socket
-    port_in_use = False
-    try:
-        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        probe.settimeout(1)
-        probe.connect(("localhost", 8000))
-        probe.close()
-        port_in_use = True
-    except Exception:
-        port_in_use = False
-
-    if port_in_use:
-        print("[WARN] Port 8000 is already in use. Attempting to free it...",
-              file=sys.stderr, flush=True)
-        _kill_process_on_port(8000)
-        # Re-check
-        try:
-            probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            probe.settimeout(1)
-            probe.connect(("localhost", 8000))
-            probe.close()
-            still_in_use = True
-        except Exception:
-            still_in_use = False
-
-        if still_in_use:
-            raise RuntimeError(
-                "Port 8000 is occupied and could not be freed. "
-                "Stop the conflicting process before running inference."
-            )
-
-    # ── Guard: image name must be non-empty ───────────────────────────────
+    # Guard: image name must be non-empty
     if not image_name or not image_name.strip():
-        raise ValueError("IMAGE_NAME is empty or None; cannot start Docker container.")
+        print("[WARN] IMAGE_NAME is empty or None; skipping docker run.",
+              file=sys.stderr, flush=True)
+        return ""
 
-    # ── Attempt docker run ─────────────────────────────────────────────────
+    # Attempt docker run — non-fatal on any failure
     try:
         container_id = subprocess.check_output(
             ["docker", "run", "-d", "-p", "8000:8000", image_name],
@@ -255,16 +109,26 @@ def start_container(image_name: str) -> str:
         ).decode().strip()
     except subprocess.CalledProcessError as exc:
         stderr_msg = exc.stderr.decode().strip() if exc.stderr else ""
-        raise RuntimeError(
-            f"'docker run' failed (exit {exc.returncode}): {stderr_msg}"
-        ) from exc
-    except FileNotFoundError:
-        raise RuntimeError(
-            "Docker executable not found. Make sure Docker is installed and on PATH."
+        print(
+            f"[WARN] docker run failed (exit {exc.returncode}): {stderr_msg}",
+            file=sys.stderr, flush=True,
         )
+        return ""
+    except FileNotFoundError:
+        print(
+            "[WARN] Docker executable not found — assuming server is already running.",
+            file=sys.stderr, flush=True,
+        )
+        return ""
+    except Exception as exc:
+        print(f"[WARN] docker run raised unexpected error: {exc}",
+              file=sys.stderr, flush=True)
+        return ""
 
     if not container_id:
-        raise RuntimeError("'docker run' returned an empty container ID.")
+        print("[WARN] docker run returned empty container ID.",
+              file=sys.stderr, flush=True)
+        return ""
 
     print(f"[INFO] Container: {container_id[:12]}", file=sys.stderr, flush=True)
     return container_id
@@ -487,6 +351,7 @@ def get_llm_action(
         fallback_action = "APPROVE"
 
     try:
+        # Change 5: bound the OpenAI call with a timeout to prevent watchdog kill
         completion = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
@@ -496,6 +361,7 @@ def get_llm_action(
             temperature=TEMPERATURE,
             max_tokens=MAX_TOKENS,
             stream=False,
+            timeout=20,
         )
 
         # Guard: completion object, choices list, or message may be None/empty
@@ -585,10 +451,8 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
     score:       float       = 0.0
     success:     bool        = False
 
-    # ── Local episode tracking (Bug 1+2 fix) ──────────────────────────────
-    # Track all episode state in-loop so the grader gets correct data
-    # regardless of /state serialization quirks.
-    in_phase2:              bool        = False   # also fixes Bug 3 (prompt routing)
+    # ── Local episode tracking ─────────────────────────────────────────────
+    in_phase2:              bool        = False
     phase1_decision:        str         = "REJECT"
     reached_phase2:         bool        = False
     docs_collected_local:   List[str]   = []
@@ -598,14 +462,13 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
     payment_history_local:  List[str]   = []
     intervention_local:     List[str]   = []
     terminal_outcome:       str         = "TIMEOUT"
-    default_prob_m3:        Optional[float] = None  # hidden prob at month 3
-    default_prob_m6:        Optional[float] = None  # hidden prob at month 6
-    phase2_month_counter:   int         = 0         # months into Phase 2
+    default_prob_m3:        Optional[float] = None
+    default_prob_m6:        Optional[float] = None
+    phase2_month_counter:   int         = 0
 
     log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
 
     try:
-        # MicrofinanceEnv is an EnvClient — use .sync() context manager
         # Wrap the connection itself so a dead server doesn't crash inference.
         try:
             env_ctx = MicrofinanceEnv(base_url=SERVER_URL).sync()
@@ -615,14 +478,12 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                 f"[ERROR] Cannot connect to environment server: {conn_exc}",
                 file=sys.stderr, flush=True,
             )
+            # Change 6: no re-raise — return safely with zero score
             log_end(success=False, steps=0, score=0.0, rewards=[])
             return 0.0
 
         try:
             # ── Switch the server to the correct task difficulty ────────────
-            # Without this, the server stays locked on whatever task it was
-            # initialised with (default: basic_lending), meaning all 3 tasks
-            # would evaluate the same configuration.
             try:
                 switch_resp = httpx.post(
                     f"{SERVER_URL}/set_task",
@@ -649,29 +510,34 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                     ConnectionError, OSError) as exc:
                 print(f"[ERROR] env.reset() connection failed: {exc}",
                       file=sys.stderr, flush=True)
+                # Change 6: no re-raise — return safely
                 log_end(success=False, steps=0, score=0.0, rewards=[])
                 return 0.0
             except Exception as exc:
-                print(f"[DEBUG] env.reset() failed: {exc}", file=sys.stderr, flush=True)
-                raise
+                print(f"[WARN] env.reset() failed: {exc}", file=sys.stderr, flush=True)
+                # Change 6: suppress — return safely instead of re-raising
+                log_end(success=False, steps=0, score=0.0, rewards=[])
+                return 0.0
 
             if result is None:
-                raise RuntimeError("env.reset() returned None; cannot proceed.")
+                print("[WARN] env.reset() returned None; cannot proceed.",
+                      file=sys.stderr, flush=True)
+                log_end(success=False, steps=0, score=0.0, rewards=[])
+                return 0.0
 
-            obs  = result.observation    # ApplicantObservation (Phase 1 start)
+            obs  = result.observation
             done = result.done
 
             if obs is None:
-                raise RuntimeError("env.reset() returned result with None observation.")
+                print("[WARN] env.reset() returned result with None observation.",
+                      file=sys.stderr, flush=True)
+                log_end(success=False, steps=0, score=0.0, rewards=[])
+                return 0.0
 
             for step in range(1, max_steps + 1):
                 if done:
                     break
 
-                # ── Bug 3 fix: use in_phase2 flag for prompt routing ──────
-                # Instead of isinstance(obs, ...) which breaks at the phase
-                # transition (APPROVE returns ApplicantObservation but we've
-                # already moved to Phase 2 internally).
                 action_dict = get_llm_action(
                     llm_client, obs, step, force_phase2=in_phase2,
                 )
@@ -684,7 +550,7 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                 if not isinstance(rationale, str):
                     rationale = str(rationale)
 
-                # ── Bug 3 fix: prevent Phase 1 actions leaking into Phase 2 ──
+                # Prevent Phase 1 actions leaking into Phase 2
                 if in_phase2 and action_type in (
                     "APPROVE", "REJECT", "REQUEST_INCOME_PROOF",
                     "REQUEST_CREDIT_HISTORY", "FLAG_FOR_REVIEW",
@@ -697,9 +563,6 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                     action_type = "DO_NOTHING"
                     rationale = "Auto-corrected: Phase 1 action in Phase 2"
 
-                # CreditAction field names confirmed from models.py:
-                #   action_type: ActionType  (the action string)
-                #   rationale:   str         (the reasoning)
                 try:
                     result = env.step(CreditAction(
                         action_type=action_type,
@@ -714,16 +577,17 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                     # Treat connection loss as episode end — score what we have
                     break
                 except Exception as exc:
-                    print(f"[DEBUG] env.step() failed at step {step}: {exc}",
+                    print(f"[WARN] env.step() failed at step {step}: {exc}",
                           file=sys.stderr, flush=True)
-                    raise
+                    # Change 6: suppress instead of re-raise
+                    break
 
                 if result is None:
                     print(f"[WARN] env.step() returned None at step {step}; ending episode.",
                           file=sys.stderr, flush=True)
                     break
 
-                obs    = result.observation   # may switch to MonitoringObservation in Phase 2
+                obs    = result.observation
                 reward = result.reward
                 done   = result.done
 
@@ -739,7 +603,6 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                 if not isinstance(done, bool):
                     done = bool(done)
 
-                # last_action_result is a field on the Pydantic obs, not an error key
                 last_result = ""
                 if obs is not None:
                     try:
@@ -753,10 +616,8 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
 
                 # ── Local episode state tracking ──────────────────────────
                 if not in_phase2:
-                    # Still in Phase 1 — track docs and decision
                     phase1_steps_local = step
 
-                    # Track doc requests from this step's action
                     if action_type == "REQUEST_INCOME_PROOF" and "income_proof" not in docs_collected_local:
                         docs_collected_local.append("income_proof")
                     elif action_type == "REQUEST_CREDIT_HISTORY" and "credit_history" not in docs_collected_local:
@@ -764,16 +625,13 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                     elif action_type == "FLAG_FOR_REVIEW" and "senior_review" not in docs_collected_local:
                         docs_collected_local.append("senior_review")
 
-                    # Detect APPROVE → Phase 2 transition
                     if action_type == "APPROVE":
                         phase1_decision = "APPROVE"
                         phase1_reward_local = reward
                         reached_phase2 = True
-                        # Check transitioning_to_phase2 flag on obs
                         transitioning = getattr(obs, "transitioning_to_phase2", False)
                         if transitioning:
                             in_phase2 = True
-                        # Debug: verify critical fields are coming through HTTP
                         print(
                             f"[DEBUG] APPROVE response: "
                             f"transitioning={transitioning} "
@@ -786,15 +644,10 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                         terminal_outcome = "REJECTED"
 
                 else:
-                    # In Phase 2 — track payments, interventions, outcome
                     if isinstance(obs, MonitoringObservation):
-                        # Use the observation's own tracking (authoritative)
                         payment_history_local = list(getattr(obs, "payment_history", []))
                         intervention_local = list(getattr(obs, "intervention_history", []))
 
-                        # Capture signal quality from the Pydantic field (reliable)
-                        # This is set on every MonitoringObservation, not parsed
-                        # from a message string.
                         if signal_quality_local is None:
                             sq_field = getattr(obs, "signal_quality", None)
                             if sq_field is not None:
@@ -805,7 +658,6 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                                     file=sys.stderr, flush=True,
                                 )
 
-                        # Capture hidden default prob at key months for grader timing
                         phase2_month_counter += 1
                         hidden_prob = getattr(obs, "current_default_prob_hidden", None)
                         if hidden_prob is not None:
@@ -814,7 +666,6 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                             elif phase2_month_counter == 6:
                                 default_prob_m6 = hidden_prob
 
-                    # Detect terminal outcome from message
                     if done and last_result:
                         msg_lower = last_result.lower()
                         if "fully repaid" in msg_lower or "repaid" in msg_lower:
@@ -824,9 +675,7 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                         elif "escalat" in msg_lower:
                             terminal_outcome = "ESCALATED"
 
-                # ── Also detect phase transition from obs type ────────────
-                # Fallback: if obs switched to MonitoringObservation, we're
-                # in Phase 2 even if we missed the transitioning flag.
+                # Fallback phase transition detection from obs type
                 if isinstance(obs, MonitoringObservation) and not in_phase2:
                     in_phase2 = True
                     if not reached_phase2:
@@ -849,7 +698,6 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                 if done:
                     break
 
-                # Guard: if obs is None after a step, we cannot continue
                 if obs is None:
                     print(f"[WARN] obs is None after step {step}; ending episode.",
                           file=sys.stderr, flush=True)
@@ -863,9 +711,6 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                 pass
 
         # ── Score via grader (authoritative) ──────────────────────────────────
-        # The grader evaluates the full trajectory. We build episode_log from
-        # LOCALLY tracked data (reliable) and only use /state for hidden ground
-        # truth fields (ground_truth_label, true_default_probability).
         try:
             state_resp = httpx.get(f"{SERVER_URL}/state", timeout=10.0)
             if state_resp.status_code == 200:
@@ -890,35 +735,25 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                     state_data = None
 
                 if state_data is not None:
-                    # ── Build episode_log from LOCAL tracking + /state hidden fields ──
-                    # Only use /state for ground truth fields that are never
-                    # observable during the episode.
                     ground_truth = state_data.get("ground_truth_label", "REJECT")
                     default_prob = state_data.get("true_default_probability", 0.5)
 
-                    # Terminal reward: prefer /state value, fall back to last reward
                     terminal_reward = state_data.get("terminal_reward")
                     if terminal_reward is None and rewards:
                         terminal_reward = rewards[-1]
                     elif terminal_reward is None:
                         terminal_reward = 0.0
 
-                    # Phase 1 reward: prefer local, fall back to /state
                     p1_reward = phase1_reward_local
                     if p1_reward is None:
                         p1_reward = state_data.get("phase1_reward", -1.5)
 
-                    # Signal quality: prefer local, fall back to /state
                     sq = signal_quality_local
                     if sq is None:
                         sq = state_data.get("signal_quality")
 
-                    # Derive borderline/conflicting from actual applicant data
-                    # instead of hardcoding from task name.  A profile near the
-                    # decision boundary (default_prob close to 0.50) is borderline
-                    # regardless of which task generated it.
                     is_borderline = abs(default_prob - 0.50) < 0.20
-                    has_conflicting = task_name == "noisy_signals"  # structural task property
+                    has_conflicting = task_name == "noisy_signals"
 
                     episode_log = {
                         "phase1_decision":         phase1_decision,
@@ -939,46 +774,56 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                         "default_prob_at_month6":  default_prob_m6,
                     }
 
-                    # Full episode_log dump — reveals every field the grader receives
                     print(
                         f"[DEBUG] episode_log: {json.dumps(episode_log, default=str)}",
                         file=sys.stderr, flush=True,
                     )
 
-                    from server.grader import grade_trajectory
-                    grade = grade_trajectory(episode_log)
-
-                    # Guard: grade.score may be None, NaN, or non-numeric
+                    # Change 3: grader import is optional — not guaranteed in evaluator PYTHONPATH
+                    grade = None
                     try:
-                        score = float(grade.score)
-                        if score != score:   # NaN check
-                            raise ValueError("grade.score is NaN")
-                    except (TypeError, ValueError, AttributeError) as gexc:
-                        print(f"[WARN] grade.score invalid ({gexc}); using reward fallback.",
+                        from server.grader import grade_trajectory
+                        grade = grade_trajectory(episode_log)
+                    except Exception as grader_exc:
+                        print(f"[WARN] Grader unavailable: {grader_exc}",
                               file=sys.stderr, flush=True)
+
+                    if grade is not None:
+                        # Guard: grade.score may be None, NaN, or non-numeric
+                        try:
+                            score = float(grade.score)
+                            if score != score:   # NaN check
+                                raise ValueError("grade.score is NaN")
+                        except (TypeError, ValueError, AttributeError) as gexc:
+                            print(f"[WARN] grade.score invalid ({gexc}); using reward fallback.",
+                                  file=sys.stderr, flush=True)
+                            if rewards:
+                                score = (rewards[-1] + 3.0) / 5.5
+                                score = min(max(score, 0.0), 1.0)
+
+                        # Guard: sub-score attributes may be missing or non-numeric
+                        try:
+                            p1   = float(getattr(grade, "phase1_score",    0.0) or 0.0)
+                            p2   = float(getattr(grade, "phase2_score",    0.0) or 0.0)
+                            tim  = float(getattr(grade, "timing_score",    0.0) or 0.0)
+                            info = float(getattr(grade, "info_flow_score", 0.0) or 0.0)
+                            suff = float(getattr(grade, "info_sufficiency", 0.0) or 0.0)
+                            print(
+                                f"[INFO] Grader score={score:.4f} "
+                                f"(p1={p1:.3f} p2={p2:.3f} "
+                                f"timing={tim:.3f} info={info:.3f} "
+                                f"suff={suff:.3f})",
+                                file=sys.stderr, flush=True,
+                            )
+                        except Exception as pexc:
+                            print(f"[INFO] Grader score={score:.4f} (sub-scores unavailable: {pexc})",
+                                  file=sys.stderr, flush=True)
+                    else:
+                        # Grader not available — use reward normalisation
                         if rewards:
                             score = (rewards[-1] + 3.0) / 5.5
                             score = min(max(score, 0.0), 1.0)
-
-                    # Guard: sub-score attributes may be missing or non-numeric
-                    try:
-                        p1   = float(getattr(grade, "phase1_score",    0.0) or 0.0)
-                        p2   = float(getattr(grade, "phase2_score",    0.0) or 0.0)
-                        tim  = float(getattr(grade, "timing_score",    0.0) or 0.0)
-                        info = float(getattr(grade, "info_flow_score", 0.0) or 0.0)
-                        suff = float(getattr(grade, "info_sufficiency", 0.0) or 0.0)
-                        print(
-                            f"[INFO] Grader score={score:.4f} "
-                            f"(p1={p1:.3f} p2={p2:.3f} "
-                            f"timing={tim:.3f} info={info:.3f} "
-                            f"suff={suff:.3f})",
-                            file=sys.stderr, flush=True,
-                        )
-                    except Exception as pexc:
-                        print(f"[INFO] Grader score={score:.4f} (sub-scores unavailable: {pexc})",
-                              file=sys.stderr, flush=True)
             else:
-                # /state not available — fall back to reward normalisation
                 print(f"[WARN] /state returned {state_resp.status_code}; using reward fallback.",
                       file=sys.stderr, flush=True)
                 if rewards:
@@ -994,7 +839,8 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
         success = score >= SUCCESS_THRESHOLD
 
     except Exception as exc:
-        print(f"[DEBUG] Task {task_name} error: {exc}", file=sys.stderr, flush=True)
+        # Change 6: top-level catch — no unhandled exception escapes run_task
+        print(f"[WARN] suppressed exception in run_task: {exc}", file=sys.stderr, flush=True)
 
     finally:
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
@@ -1005,25 +851,25 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    # Change 4: do not exit on missing API key — let inference attempt proceed
     if not API_KEY:
-        print("[ERROR] HF_TOKEN or API_KEY environment variable not set.", flush=True)
-        sys.exit(1)
+        print("[ERROR] API key missing — inference may fail.", flush=True)
 
+    # Change 4: do not exit on missing IMAGE_NAME — assume external server mode
     if not IMAGE_NAME:
-        print("[ERROR] IMAGE_NAME environment variable not set.", flush=True)
-        sys.exit(1)
+        print("[WARN] IMAGE_NAME not set — assuming external server.", flush=True)
 
     # Guard: validate API_BASE_URL is a non-empty string
     if not API_BASE_URL or not API_BASE_URL.strip():
-        print("[ERROR] API_BASE_URL is empty or not set.", flush=True)
-        sys.exit(1)
+        print("[WARN] API_BASE_URL is empty or not set — inference may fail.", flush=True)
 
     # Guard: initialise OpenAI client safely
     try:
         llm_client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     except Exception as exc:
         print(f"[ERROR] Failed to initialise OpenAI client: {exc}", flush=True)
-        sys.exit(1)
+        # Still attempt tasks — env interaction doesn't need the LLM client to init cleanly
+        llm_client = None
 
     print(f"[INFO] Model  : {MODEL_NAME}", file=sys.stderr, flush=True)
     print(f"[INFO] Image  : {IMAGE_NAME}", file=sys.stderr, flush=True)
@@ -1031,23 +877,21 @@ def main() -> None:
     print(f"[INFO] Tasks  : {[t['name'] for t in TASKS]}", file=sys.stderr, flush=True)
     print("", file=sys.stderr, flush=True)
 
-    # Guard: start_container may raise — catch and exit cleanly
+    # Change 2: start_container is non-fatal — returns "" on any failure
     container_id = ""
     try:
-        container_id = start_container(IMAGE_NAME)
+        container_id = start_container(IMAGE_NAME) if IMAGE_NAME else ""
     except Exception as exc:
-        print(f"[ERROR] Could not start Docker container: {exc}", flush=True)
-        sys.exit(1)
+        print(f"[WARN] Docker unavailable or failed: {exc}", flush=True)
+        container_id = ""
 
     try:
-        # wait_for_server returns False if the server never came up.
-        # We still attempt tasks so log_end lines are always emitted;
-        # individual tasks will fail gracefully on connection errors.
+        # Change 7: wait_for_server failure is non-fatal
         server_ready = False
         try:
             server_ready = wait_for_server(SERVER_URL, timeout_seconds=90)
         except Exception as exc:
-            print(f"[ERROR] Server readiness check crashed: {exc}", flush=True)
+            print(f"[WARN] Server readiness check failed: {exc}", flush=True)
 
         if not server_ready:
             print("[WARN] Proceeding to tasks despite server not confirmed ready.",
@@ -1058,14 +902,14 @@ def main() -> None:
             try:
                 scores[task["name"]] = run_task(task, llm_client)
             except Exception as exc:
-                # Individual task crash must not abort other tasks
-                print(f"[DEBUG] Unhandled error in task '{task['name']}': {exc}",
+                # Change 6: individual task crash must not abort other tasks
+                print(f"[WARN] suppressed exception in task '{task['name']}': {exc}",
                       file=sys.stderr, flush=True)
                 scores[task["name"]] = 0.0
             print("", file=sys.stderr, flush=True)
 
     finally:
-        # Always stop the container, even if a task crashes
+        # Always attempt container cleanup — non-fatal
         stop_container(container_id)
 
     # ── Summary ────────────────────────────────────────────────────────────────
@@ -1079,4 +923,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()  
+    main()
