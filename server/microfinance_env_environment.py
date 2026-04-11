@@ -385,11 +385,14 @@ class MicrofinanceEnvironment(Environment):
         atype = action.action_type
 
         if atype not in VALID_PHASE2_ACTIONS:
-            # Silently treat unknown/wrong-phase action as DO_NOTHING
+            # Wrong-phase or unknown action → convert to DO_NOTHING with penalty
+            INVALID_P2_ACTION_PENALTY = -0.10
+            s.phase2_intervention_costs += INVALID_P2_ACTION_PENALTY
+            original_action = action.action_type
             atype = "DO_NOTHING"
             action = CreditAction(
                 action_type="DO_NOTHING",
-                rationale=f"[Invalid Phase 2 action '{action.action_type}' → DO_NOTHING]",
+                rationale=f"[Invalid Phase 2 action '{original_action}' → DO_NOTHING, penalty {INVALID_P2_ACTION_PENALTY:+.2f}]",
             )
 
         s.months_completed += 1

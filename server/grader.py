@@ -176,8 +176,16 @@ def grade_trajectory(episode_log: dict) -> TrajectoryGrade:
             timing_score = 0.2   # very late (reactive too slow)
 
         # Bonus: did restructure happen early enough to actually help?
-        p_m3 = episode_log.get("default_prob_at_month3", default_prob)
-        p_m6 = episode_log.get("default_prob_at_month6", default_prob)
+        p_m3 = episode_log.get("default_prob_at_month3")
+        p_m6 = episode_log.get("default_prob_at_month6")
+        # Null guard: month-3/6 snapshots may be None when the episode
+        # never reached those milestones (e.g. basic_lending with 6 months,
+        # or early escalation).  Fall back to default_prob so the comparison
+        # is always float-vs-float.
+        if p_m3 is None:
+            p_m3 = default_prob
+        if p_m6 is None:
+            p_m6 = default_prob
         if p_m3 < p_m6:
             timing_score = max(0.0, timing_score - 0.2)  # interventions too late
     elif phase2 and not interventions:
@@ -222,15 +230,34 @@ def grade_trajectory(episode_log: dict) -> TrajectoryGrade:
     )
     bd["counterfactual_modifier"] = round(cf_modifier, 3)
 
-    # ── Composite (v2 weights) ────────────────────────────────────────────
-    # phase1=30%, phase2=35%, timing=10%, info_flow=10%, info_sufficiency=15%
-    raw_composite = (
-        phase1_score  * 0.30
-        + phase2_score  * 0.35
-        + timing_score  * 0.10
-        + info_flow     * 0.10
-        + info_suff     * 0.15
-    )
+    # ── Composite (v2 weights, phase-aware normalization) ──────────────────
+    # When Phase 2 never ran (rejected/timeout), exclude phase2 and timing
+    # from the formula and redistribute their weight proportionally across
+    # the components that actually fired.  This prevents a rejected episode
+    # from receiving an artificial p2=0.500 that inflates the final grade.
+    if phase2:
+        # Full formula: phase1=30%, phase2=35%, timing=10%, info_flow=10%, info_sufficiency=15%
+        raw_composite = (
+            phase1_score  * 0.30
+            + phase2_score  * 0.35
+            + timing_score  * 0.10
+            + info_flow     * 0.10
+            + info_suff     * 0.15
+        )
+    else:
+        # Phase 2 never ran — normalize over phase1 (30%), info_flow (10%),
+        # info_sufficiency (15%).  Original sum = 0.55; scale to 1.0.
+        active_sum = 0.30 + 0.10 + 0.15   # = 0.55
+        raw_composite = (
+            phase1_score  * (0.30 / active_sum)
+            + info_flow     * (0.10 / active_sum)
+            + info_suff     * (0.15 / active_sum)
+        )
+        # Cap: rejecting can never exceed 0.80 overall — agent didn't
+        # prove Phase 2 skill, so there's an inherent ceiling.
+        raw_composite = min(raw_composite, 0.80)
+        bd["phase2_excluded"] = True
+        bd["active_weight_sum"] = round(active_sum, 3)
 
     # Apply counterfactual as a SOFT modifier (10% influence)
     # composite = 90% raw + 10% counterfactual-modified raw

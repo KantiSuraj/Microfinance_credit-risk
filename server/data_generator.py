@@ -253,9 +253,19 @@ def generate_applicant(
         past_defaults, repayment_streak, previous_loans, region, rng
     )
 
+    # Adversarial profiles MUST remain APPROVE-worthy by design.
+    # _score_applicant uses randomised weights that can occasionally push
+    # the score above 0.50 despite the structurally favourable inputs.
+    # Clamp to 0.45 so the label is always APPROVE.
+    if force_adversarial and default_prob > 0.50:
+        default_prob = rng.uniform(0.35, 0.45)
+        risk_band = "medium_risk"
+
     # ── Noisy label (~8 % flip) ───────────────────────────────────────────
+    # Adversarial profiles are intentionally engineered as APPROVE-worthy;
+    # flipping them would sabotage the task design.
     has_noise = False
-    if rng.random() < 0.08:
+    if not force_adversarial and rng.random() < 0.08:
         has_noise     = True
         default_prob  = 1.0 - default_prob  # flip probability
 
