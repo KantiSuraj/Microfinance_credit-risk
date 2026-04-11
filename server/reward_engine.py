@@ -214,16 +214,46 @@ def phase2_spam_penalty(consecutive_reminders: int) -> float:
     return round(SPAM_REMINDER_PENALTY * (consecutive_reminders - 1), 4)
 
 
-def phase2_monotonic_penalty(consecutive_same_action: int) -> float:
+def phase2_monotonic_penalty(
+    consecutive_same_action: int,
+    action: str = "DO_NOTHING",
+    cumulative_misses: int = 0,
+    missed_streak: int = 0,
+    current_default_prob: float = 0.10,
+    shock_scheduled: bool = False,
+) -> float:
     """
-    Penalty for using the EXACT SAME action for 4+ consecutive months.
-    Prevents "always DO_NOTHING" or "always SEND_REMINDER" exploits.
+    Context-conditioned penalty for using the EXACT SAME action 4+ months.
+
+    For non-DO_NOTHING actions (e.g. always SEND_REMINDER), the penalty fires
+    purely on streak length — spamming the same intervention is always wasteful.
+
+    For DO_NOTHING, the penalty ONLY fires when danger signals indicate the
+    borrower actually needed attention.  A sequence of correct DO_NOTHINGs on
+    a healthy borrower is competent monitoring, not a degenerate strategy.
 
     Returns 0.0 if fewer than 4 consecutive same actions.
     Otherwise: -0.04 per month beyond the 3rd.
     """
     if consecutive_same_action < 4:
         return 0.0
+
+    # Non-DO_NOTHING monotonic actions are always penalized (sequence-only)
+    if action != "DO_NOTHING":
+        return round(MONOTONIC_STRATEGY_PENALTY * (consecutive_same_action - 3), 4)
+
+    # DO_NOTHING: only penalize if the borrower actually needed attention
+    danger_present = (
+        cumulative_misses >= 2 or
+        missed_streak >= 1 or
+        current_default_prob > 0.30 or
+        shock_scheduled
+    )
+
+    if not danger_present:
+        return 0.0  # healthy borrower — DO_NOTHING is correct, no penalty
+
+    # Danger was present and agent did nothing repeatedly
     return round(MONOTONIC_STRATEGY_PENALTY * (consecutive_same_action - 3), 4)
 
 
@@ -289,17 +319,34 @@ def audit_reward(episode_log: dict) -> dict:
     )
 
     # Flag 8 (NEW): Phase 2 monotonic strategy — same action for 5+ months straight
+    # Context-conditioned: a run of DO_NOTHING on a borrower with zero misses
+    # during that window is correct monitoring, not a degenerate strategy.
     if len(p2_actions) >= 5:
-        # Check longest run of same action
+        # Check longest run of same action and what that action was
         longest_run = 1
         current_run = 1
+        longest_run_action = p2_actions[0]
+        current_run_action = p2_actions[0]
         for i in range(1, len(p2_actions)):
             if p2_actions[i] == p2_actions[i - 1]:
                 current_run += 1
-                longest_run = max(longest_run, current_run)
+                if current_run > longest_run:
+                    longest_run = current_run
+                    longest_run_action = current_run_action
             else:
                 current_run = 1
-        flags["phase2_monotonic_strategy"] = (longest_run >= 5)
+                current_run_action = p2_actions[i]
+
+        if longest_run >= 5:
+            if longest_run_action == "DO_NOTHING":
+                # Context check: were there misses during the episode?
+                misses = sum(1 for p in payment_history if p == "MISSED")
+                flags["phase2_monotonic_strategy"] = (misses >= 2)
+            else:
+                # Non-DO_NOTHING monotonic run is always suspicious
+                flags["phase2_monotonic_strategy"] = True
+        else:
+            flags["phase2_monotonic_strategy"] = False
     else:
         flags["phase2_monotonic_strategy"] = False
 

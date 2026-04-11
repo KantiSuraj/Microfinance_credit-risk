@@ -247,6 +247,10 @@ def generate_applicant(
         # Rural region gets a slight score reduction (easier approve)
         region = "rural"
 
+    # ── Clean up values ───────────────────────────────────────────────────
+    income = round(income, -2)      # snap to hundreds
+    loan_ask = round(loan_ask, -3)  # snap to thousands
+
     # ── Ground truth scoring ──────────────────────────────────────────────
     default_prob, risk_band = _score_applicant(
         income, loan_ask, dependents, stability,

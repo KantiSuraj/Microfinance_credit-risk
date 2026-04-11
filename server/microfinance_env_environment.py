@@ -451,7 +451,14 @@ class MicrofinanceEnvironment(Environment):
         else:
             s.consecutive_same_action = 1
             s.last_phase2_action = atype
-        mono_cost = RE.phase2_monotonic_penalty(s.consecutive_same_action)
+        mono_cost = RE.phase2_monotonic_penalty(
+            consecutive_same_action=s.consecutive_same_action,
+            action=atype,
+            cumulative_misses=s.cumulative_misses,
+            missed_streak=s.missed_streak,
+            current_default_prob=s.current_default_prob,
+            shock_scheduled=s.shock_scheduled,
+        )
         if mono_cost < 0:
             s.phase2_intervention_costs += mono_cost
             note += f" ⚠ Monotonic strategy penalty ({s.consecutive_same_action} same): {mono_cost:+.3f}."

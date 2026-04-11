@@ -880,26 +880,68 @@ def test_no_single_strategy_dominates():
 # ══════════════════════════════════════════════════════════════════════════
 
 def test_phase2_monotonic_penalty():
-    """Using the exact same Phase 2 action 5+ times must be penalized."""
+    """Context-conditioned monotonic penalty: healthy DO_NOTHING is correct, not degenerate."""
     print("\n" + "═"*60)
-    print("TEST 21: Phase 2 monotonic strategy is penalized")
+    print("TEST 21: Phase 2 monotonic penalty is context-conditioned")
     print("═"*60)
     from server.reward_engine import phase2_monotonic_penalty
 
-    # 3 same → no penalty
-    p3 = phase2_monotonic_penalty(3)
-    # 4 same → penalty starts
-    p4 = phase2_monotonic_penalty(4)
-    # 7 same → bigger penalty
-    p7 = phase2_monotonic_penalty(7)
+    # ── Healthy borrower: DO_NOTHING is correct → no penalty ──────────
+    p3_healthy = phase2_monotonic_penalty(
+        3, action="DO_NOTHING", cumulative_misses=0,
+        missed_streak=0, current_default_prob=0.10, shock_scheduled=False,
+    )
+    p4_healthy = phase2_monotonic_penalty(
+        4, action="DO_NOTHING", cumulative_misses=0,
+        missed_streak=0, current_default_prob=0.10, shock_scheduled=False,
+    )
+    p7_healthy = phase2_monotonic_penalty(
+        7, action="DO_NOTHING", cumulative_misses=0,
+        missed_streak=0, current_default_prob=0.10, shock_scheduled=False,
+    )
 
-    print(f"    3 consecutive same: {p3}")
-    print(f"    4 consecutive same: {p4}")
-    print(f"    7 consecutive same: {p7}")
+    print(f"    Healthy borrower:")
+    print(f"      3× DO_NOTHING: {p3_healthy}")
+    print(f"      4× DO_NOTHING: {p4_healthy}")
+    print(f"      7× DO_NOTHING: {p7_healthy}")
 
-    check(p3 == 0.0, "3 consecutive same → no penalty")
-    check(p4 < 0, f"4 consecutive same → penalty ({p4})")
-    check(p7 < p4, f"7 consecutive same ({p7}) harsher than 4 ({p4})")
+    check(p3_healthy == 0.0, "3× DO_NOTHING healthy → no penalty")
+    check(p4_healthy == 0.0, "4× DO_NOTHING healthy → no penalty (correct monitoring)")
+    check(p7_healthy == 0.0, "7× DO_NOTHING healthy → no penalty (correct monitoring)")
+
+    # ── Danger present: DO_NOTHING is lazy → penalty ──────────────────
+    p3_danger = phase2_monotonic_penalty(
+        3, action="DO_NOTHING", cumulative_misses=3,
+        missed_streak=2, current_default_prob=0.50, shock_scheduled=False,
+    )
+    p4_danger = phase2_monotonic_penalty(
+        4, action="DO_NOTHING", cumulative_misses=3,
+        missed_streak=2, current_default_prob=0.50, shock_scheduled=False,
+    )
+    p7_danger = phase2_monotonic_penalty(
+        7, action="DO_NOTHING", cumulative_misses=3,
+        missed_streak=2, current_default_prob=0.50, shock_scheduled=False,
+    )
+
+    print(f"    Danger present:")
+    print(f"      3× DO_NOTHING: {p3_danger}")
+    print(f"      4× DO_NOTHING: {p4_danger}")
+    print(f"      7× DO_NOTHING: {p7_danger}")
+
+    check(p3_danger == 0.0, "3× DO_NOTHING danger → no penalty (below threshold)")
+    check(p4_danger < 0, f"4× DO_NOTHING danger → penalty ({p4_danger})")
+    check(p7_danger < p4_danger, f"7× DO_NOTHING danger ({p7_danger}) harsher than 4× ({p4_danger})")
+
+    # ── Non-DO_NOTHING: always penalized regardless of context ────────
+    p7_reminder = phase2_monotonic_penalty(
+        7, action="SEND_REMINDER", cumulative_misses=0,
+        missed_streak=0, current_default_prob=0.10, shock_scheduled=False,
+    )
+
+    print(f"    Non-DO_NOTHING (SEND_REMINDER, healthy borrower):")
+    print(f"      7× SEND_REMINDER: {p7_reminder}")
+
+    check(p7_reminder < 0, f"7× SEND_REMINDER always penalized ({p7_reminder})")
 
 
 # ══════════════════════════════════════════════════════════════════════════
