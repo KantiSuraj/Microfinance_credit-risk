@@ -270,26 +270,38 @@ def start_container(image_name: str) -> str:
     return container_id
 
 
-def wait_for_server(url: str, retries: int = 30) -> None:
-    """Block until /health returns 200 or raise on timeout."""
-    print("[INFO] Waiting for server...", file=sys.stderr, flush=True)
+def wait_for_server(url: str, timeout_seconds: int = 90) -> bool:
+    """Block until /health returns 200 or timeout.
+
+    Returns True if server became ready, False otherwise.
+    Never raises — all exceptions are caught and logged.
+    """
+    print(f"[INFO] Waiting for server (timeout={timeout_seconds}s)...",
+          file=sys.stderr, flush=True)
     last_exc: Optional[Exception] = None
-    for _ in range(retries):
+    deadline = time.monotonic() + timeout_seconds
+    attempt = 0
+    while time.monotonic() < deadline:
+        attempt += 1
         try:
-            r = httpx.get(f"{url}/health", timeout=2.0)
+            r = httpx.get(f"{url}/health", timeout=3.0)
             if r.status_code == 200:
-                print("[INFO] Server is ready.", file=sys.stderr, flush=True)
-                return
+                print(f"[INFO] Server is ready (attempt {attempt}).",
+                      file=sys.stderr, flush=True)
+                return True
             # Non-200 but server responded — keep waiting
-        except httpx.TransportError as exc:
+        except (httpx.TransportError, httpx.TimeoutException,
+                ConnectionError, OSError) as exc:
             last_exc = exc
         except Exception as exc:
             last_exc = exc
-        time.sleep(1)
-    raise RuntimeError(
-        f"Server at {url} did not become ready after {retries}s. "
-        f"Last error: {last_exc}"
+        time.sleep(2)
+    print(
+        f"[ERROR] Server at {url} did not become ready after {timeout_seconds}s. "
+        f"Last error: {last_exc}",
+        file=sys.stderr, flush=True,
     )
+    return False
 
 
 def stop_container(container_id: str) -> None:
@@ -594,8 +606,19 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
 
     try:
         # MicrofinanceEnv is an EnvClient — use .sync() context manager
-        with MicrofinanceEnv(base_url=SERVER_URL).sync() as env:
+        # Wrap the connection itself so a dead server doesn't crash inference.
+        try:
+            env_ctx = MicrofinanceEnv(base_url=SERVER_URL).sync()
+            env = env_ctx.__enter__()
+        except Exception as conn_exc:
+            print(
+                f"[ERROR] Cannot connect to environment server: {conn_exc}",
+                file=sys.stderr, flush=True,
+            )
+            log_end(success=False, steps=0, score=0.0, rewards=[])
+            return 0.0
 
+        try:
             # ── Switch the server to the correct task difficulty ────────────
             # Without this, the server stays locked on whatever task it was
             # initialised with (default: basic_lending), meaning all 3 tasks
@@ -613,12 +636,21 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                     )
                 else:
                     print(f"[INFO] Task set to '{task_name}'.", file=sys.stderr, flush=True)
+            except (httpx.TransportError, httpx.TimeoutException,
+                    ConnectionError, OSError) as exc:
+                print(f"[WARN] /set_task connection failed: {exc}", file=sys.stderr, flush=True)
             except Exception as exc:
                 print(f"[WARN] /set_task request failed: {exc}", file=sys.stderr, flush=True)
 
             # Guard: env.reset() may raise or return None
             try:
                 result = env.reset()
+            except (httpx.TransportError, httpx.TimeoutException,
+                    ConnectionError, OSError) as exc:
+                print(f"[ERROR] env.reset() connection failed: {exc}",
+                      file=sys.stderr, flush=True)
+                log_end(success=False, steps=0, score=0.0, rewards=[])
+                return 0.0
             except Exception as exc:
                 print(f"[DEBUG] env.reset() failed: {exc}", file=sys.stderr, flush=True)
                 raise
@@ -673,6 +705,14 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                         action_type=action_type,
                         rationale=rationale,
                     ))
+                except (httpx.TransportError, httpx.TimeoutException,
+                        ConnectionError, OSError) as exc:
+                    print(
+                        f"[ERROR] env.step() connection failed at step {step}: {exc}",
+                        file=sys.stderr, flush=True,
+                    )
+                    # Treat connection loss as episode end — score what we have
+                    break
                 except Exception as exc:
                     print(f"[DEBUG] env.step() failed at step {step}: {exc}",
                           file=sys.stderr, flush=True)
@@ -814,6 +854,13 @@ def run_task(task_config: dict, llm_client: OpenAI) -> float:
                     print(f"[WARN] obs is None after step {step}; ending episode.",
                           file=sys.stderr, flush=True)
                     break
+
+        finally:
+            # Always close the env context manager
+            try:
+                env_ctx.__exit__(None, None, None)
+            except Exception:
+                pass
 
         # ── Score via grader (authoritative) ──────────────────────────────────
         # The grader evaluates the full trajectory. We build episode_log from
@@ -993,13 +1040,18 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        # Guard: wait_for_server may raise — let it propagate so finally still cleans up
+        # wait_for_server returns False if the server never came up.
+        # We still attempt tasks so log_end lines are always emitted;
+        # individual tasks will fail gracefully on connection errors.
+        server_ready = False
         try:
-            wait_for_server(SERVER_URL)
-        except RuntimeError as exc:
-            print(f"[ERROR] Server never became ready: {exc}", flush=True)
-            # Still run tasks loop so log_end is always emitted; tasks will fail gracefully
-            # (env connections will raise and be caught inside run_task)
+            server_ready = wait_for_server(SERVER_URL, timeout_seconds=90)
+        except Exception as exc:
+            print(f"[ERROR] Server readiness check crashed: {exc}", flush=True)
+
+        if not server_ready:
+            print("[WARN] Proceeding to tasks despite server not confirmed ready.",
+                  file=sys.stderr, flush=True)
 
         scores = {}
         for task in TASKS:
