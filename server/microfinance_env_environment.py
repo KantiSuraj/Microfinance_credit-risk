@@ -158,6 +158,10 @@ class MicrofinanceEnvironment(Environment):
             raise ValueError(
                 f"Unknown task '{task_name}'. Valid tasks: {list(TASK_CONFIGS.keys())}"
             )
+            
+        if self._task_config and self._task_config.name == task_name:
+            return
+            
         self._task_config = TASK_CONFIGS[task_name]
         tc = self._task_config
         # Regenerate dataset with the task's seed and adversarial requirements
