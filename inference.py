@@ -85,55 +85,6 @@ TASKS = [
 # The evaluator manages the Docker container externally; port management
 # is not our responsibility and must not crash the script.
 
-
-def start_container(image_name: str) -> str:
-    """Start the Docker container and return its ID.
-
-    Change 2: All hard raises replaced with warn-and-return-empty so the
-    script degrades gracefully when Docker is unavailable or already managed
-    externally by the evaluator.
-    """
-    print("[INFO] Starting Docker container...", file=sys.stderr, flush=True)
-
-    # Guard: image name must be non-empty
-    if not image_name or not image_name.strip():
-        print("[WARN] IMAGE_NAME is empty or None; skipping docker run.",
-              file=sys.stderr, flush=True)
-        return ""
-
-    # Attempt docker run — non-fatal on any failure
-    try:
-        container_id = subprocess.check_output(
-            ["docker", "run", "-d", "-p", "8000:8000", image_name],
-            stderr=subprocess.PIPE,
-        ).decode().strip()
-    except subprocess.CalledProcessError as exc:
-        stderr_msg = exc.stderr.decode().strip() if exc.stderr else ""
-        print(
-            f"[WARN] docker run failed (exit {exc.returncode}): {stderr_msg}",
-            file=sys.stderr, flush=True,
-        )
-        return ""
-    except FileNotFoundError:
-        print(
-            "[WARN] Docker executable not found — assuming server is already running.",
-            file=sys.stderr, flush=True,
-        )
-        return ""
-    except Exception as exc:
-        print(f"[WARN] docker run raised unexpected error: {exc}",
-              file=sys.stderr, flush=True)
-        return ""
-
-    if not container_id:
-        print("[WARN] docker run returned empty container ID.",
-              file=sys.stderr, flush=True)
-        return ""
-
-    print(f"[INFO] Container: {container_id[:12]}", file=sys.stderr, flush=True)
-    return container_id
-
-
 def wait_for_server(url: str, timeout_seconds: int = 90) -> bool:
     """Block until /health returns 200 or timeout.
 
@@ -166,42 +117,6 @@ def wait_for_server(url: str, timeout_seconds: int = 90) -> bool:
         file=sys.stderr, flush=True,
     )
     return False
-
-
-def stop_container(container_id: str) -> None:
-    """Stop and remove the Docker container."""
-    if not container_id:
-        print("[WARN] stop_container called with empty container_id; skipping.",
-              file=sys.stderr, flush=True)
-        return
-    print("[INFO] Stopping container...", file=sys.stderr, flush=True)
-    try:
-        subprocess.run(
-            ["docker", "stop", container_id],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=30,
-        )
-    except subprocess.TimeoutExpired:
-        print("[WARN] 'docker stop' timed out; forcing kill.", file=sys.stderr, flush=True)
-        subprocess.run(
-            ["docker", "kill", container_id],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception as exc:
-        print(f"[WARN] 'docker stop' raised: {exc}", file=sys.stderr, flush=True)
-
-    try:
-        subprocess.run(
-            ["docker", "rm", container_id],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=15,
-        )
-    except Exception as exc:
-        print(f"[WARN] 'docker rm' raised: {exc}", file=sys.stderr, flush=True)
-
 
 # ── Stdout logging (exact spec format) ────────────────────────────────────────
 
@@ -877,14 +792,6 @@ def main() -> None:
     print(f"[INFO] Tasks  : {[t['name'] for t in TASKS]}", file=sys.stderr, flush=True)
     print("", file=sys.stderr, flush=True)
 
-    # Change 2: start_container is non-fatal — returns "" on any failure
-    container_id = ""
-    try:
-        container_id = start_container(IMAGE_NAME) if IMAGE_NAME else ""
-    except Exception as exc:
-        print(f"[WARN] Docker unavailable or failed: {exc}", flush=True)
-        container_id = ""
-
     try:
         # Change 7: wait_for_server failure is non-fatal
         server_ready = False
@@ -894,8 +801,8 @@ def main() -> None:
             print(f"[WARN] Server readiness check failed: {exc}", flush=True)
 
         if not server_ready:
-            print("[WARN] Proceeding to tasks despite server not confirmed ready.",
-                  file=sys.stderr, flush=True)
+            print("[ERROR] Server not available — exiting safely.", flush=True)
+            return
 
         scores = {}
         for task in TASKS:
@@ -910,7 +817,7 @@ def main() -> None:
 
     finally:
         # Always attempt container cleanup — non-fatal
-        stop_container(container_id)
+        pass
 
     # ── Summary ────────────────────────────────────────────────────────────────
     print("=" * 60, flush=True)
